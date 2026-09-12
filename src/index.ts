@@ -25,6 +25,7 @@ import { createAndroidTools, ANDROID_TOOL_NAMES } from './tools.js'
 import { createAndroidUiTools, ANDROID_UI_TOOL_NAMES } from './tool-uitree.js'
 import { createAndroidOcrTools, ANDROID_OCR_TOOL_NAMES } from './tool-ocr.js'
 import { createAndroidRowTools, ANDROID_ROW_TOOL_NAMES } from './tool-list-rows.js'
+import { createAndroidVisionQueryTools, ANDROID_VISION_QUERY_TOOL_NAMES } from './tool-vision-query.js'
 import { createAndroidLogTools } from './tool-logs.js'
 import { createAndroidDebugTools, ANDROID_DEBUG_TOOL_NAMES } from './tool-debug.js'
 import { registerAndroidSkill } from './skill.js'
@@ -164,6 +165,12 @@ export {
   type AndroidRowTools,
 } from './tool-list-rows.js'
 export {
+  ANDROID_VISION_QUERY_TOOL_NAMES,
+  createAndroidVisionQueryTools,
+  type AndroidVisionQueryTools,
+  type AndroidVisionQueryToolsOptions,
+} from './tool-vision-query.js'
+export {
   LOG_BUFFERS,
   LOG_PRIORITIES,
   LogLineRing,
@@ -255,6 +262,10 @@ export function apply(ctx: Context): () => Promise<void> {
   const uiTools = createAndroidUiTools(host, { vision })
   const ocrTools = createAndroidOcrTools(host, { vision })
   const rowTools = createAndroidRowTools(host, { vision })
+  // Semantic reading: these DELIVER the screenshot to the calling model, so they
+  // exist only where the vision seam does (they fail loudly with the remedy on a
+  // text-only route rather than returning something ungrounded).
+  const visionQueryTools = createAndroidVisionQueryTools(host, { vision })
   const logTools = createAndroidLogTools(host)
   // Debugging & memory diagnostics: created once so the same disposer can
   // stop new calls from starting while the plugin tears down.
@@ -280,6 +291,8 @@ export function apply(ctx: Context): () => Promise<void> {
   disposers.push(ctx.effect(() => hostCtx.tools.register(uiTools.androidTapElement), 'dsh-android:android_tap_element'))
   disposers.push(ctx.effect(() => hostCtx.tools.register(rowTools.androidUiRows), 'dsh-android:android_ui_rows'))
   disposers.push(ctx.effect(() => hostCtx.tools.register(rowTools.androidTapRow), 'dsh-android:android_tap_row'))
+  disposers.push(ctx.effect(() => hostCtx.tools.register(visionQueryTools.androidQuery), 'dsh-android:android_query'))
+  disposers.push(ctx.effect(() => hostCtx.tools.register(visionQueryTools.androidAssert), 'dsh-android:android_assert'))
   // The OCR trio registers as ONE effect: they share a backend, and a partial
   // registration (dsh-ios shipped one for a while) advertises a verb in the
   // playbook that has no implementation behind it.
@@ -315,7 +328,8 @@ export function apply(ctx: Context): () => Promise<void> {
   const adb = host.toolchain.binary
   ctx.logger.info(
     `dsh-android mounted (${ANDROID_TOOL_NAMES.join(' + ')} + ${ANDROID_UI_TOOL_NAMES.join(' + ')} + `
-    + `${ANDROID_ROW_TOOL_NAMES.join(' + ')} + ${ANDROID_OCR_TOOL_NAMES.join(' + ')} + android_logs + `
+    + `${ANDROID_ROW_TOOL_NAMES.join(' + ')} + ${ANDROID_VISION_QUERY_TOOL_NAMES.join(' + ')} + `
+    + `${ANDROID_OCR_TOOL_NAMES.join(' + ')} + android_logs + `
     + `${ANDROID_DEBUG_TOOL_NAMES.join(' + ')}; adb: `
     + `${adb.available ? `${adb.command ?? 'adb'} (${adb.source})` : `unavailable — ${adb.reason ?? '?'}`})`,
   )
