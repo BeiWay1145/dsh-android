@@ -421,6 +421,11 @@ export async function dumpUiTreeXml(
   // wasted, so we go straight to the fallback (which writes a file and reads
   // it back — a genuinely different code path, not a repeat).
   const beforeRetry = await screenFingerprint(toolchain, serial)
+  // Whether the primary was actually RE-attempted after the settle. Only a real
+  // second failure proves the foreground never idles; a gate-skipped retry
+  // proves nothing, so the fallback (a different path) must still be tried.
+  let retried = false
+  let skippedRedundantRetry = false
   for (let attempt = 0; attempt < 2; attempt += 1) {
     try {
       const buffer = await toolchain.execOut(serial, ['uiautomator', 'dump', '/dev/tty'], execOptions)
@@ -432,16 +437,22 @@ export async function dumpUiTreeXml(
         const after = await screenFingerprint(toolchain, serial)
         // Unknown digest (fingerprint unavailable) must NOT be read as
         // "unchanged": retry, because the cheap signal failed, not the screen.
-        if (after.digest === '' || after.digest !== beforeRetry.digest) continue
+        if (after.digest === '' || after.digest !== beforeRetry.digest) {
+          retried = true
+          continue
+        }
+        skippedRedundantRetry = true
         primaryFailure = `${primaryFailure} (the screen did not change during the 800 ms settle, so a `
           + 'second identical dump was skipped)'
+        break
       }
       break
     }
   }
-  if (primaryFailure !== undefined && /could not get idle state/i.test(primaryFailure)) {
-    // The /sdcard fallback runs the SAME dump against the same never-idle
-    // foreground; paying its ~10 s only to fail identically helps nobody.
+  if (retried && primaryFailure !== undefined && /could not get idle state/i.test(primaryFailure)) {
+    // TWO full primary attempts both failed on idle: this foreground genuinely
+    // never idles, so the /sdcard fallback would run the same dump and fail the
+    // same way — paying its ~2.4 s to prove that helps nobody.
     throw new Error(
       `uiautomator could not dump the window hierarchy of ${serial} (${primaryFailure}). `
       + 'The foreground app is continuously animating (web pages in a browser are the classic case), '
@@ -461,6 +472,10 @@ export async function dumpUiTreeXml(
     await toolchain.shell(serial, ['rm', '-f', remotePath], execOptions).catch(() => {})
     const fallbackFailure = error instanceof Error ? error.message : String(error)
     const idleStarved = /could not get idle state/i.test(`${primaryFailure} ${fallbackFailure}`)
+    const skippedNote = skippedRedundantRetry
+      ? ' NOTE: the second primary dump was skipped after the cheap screen fingerprint showed the screen had '
+        + 'not moved; the /sdcard fallback is a genuinely different path, so it was still attempted.'
+      : ''
     throw new Error(
       `uiautomator could not dump the window hierarchy of ${serial} `
       + `(exec-out /dev/tty: ${primaryFailure}; ${remotePath} fallback: ${fallbackFailure}). `
@@ -472,7 +487,8 @@ export async function dumpUiTreeXml(
           + 'android_find_text and tap with android_tap_text instead (OCR reads pixels and needs no idle).'
         : 'uiautomator needs the screen ON and an idle window — wake the device (android_interact with '
           + 'button "wake"), wait for animations to settle, and retry; if it keeps failing the screen is '
-          + 'likely secure (FLAG_SECURE) and only android_find_text can read it.'),
+          + 'likely secure (FLAG_SECURE) and only android_find_text can read it.')
+      + skippedNote,
     )
   }
 }
