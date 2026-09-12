@@ -34,9 +34,20 @@ export interface AndroidImageRef {
   name?: string
 }
 
-/** Structural face of the `attachments` service (AttachmentStore). */
+/**
+ * Structural face of the `attachments` service (AttachmentStore).
+ *
+ * The PUBLIC commit entry is `saveImages` (plural, one ordered batch). There
+ * is a `saveImage` method in the kernel implementation, but it is an internal
+ * step of `saveImages` and is NOT part of the object the service exposes —
+ * probing for it always answers "absent", which silently disables the whole
+ * image seam (every capture tool then degrades to text with no image block and
+ * no error, and android_query/android_assert refuse for the wrong reason).
+ */
 export interface AttachmentStoreLike {
-  saveImage(input: { data: Uint8Array; mediaType: string; name?: string }): Promise<AndroidImageRef>
+  saveImages(inputs: Array<{ data: Uint8Array; mediaType: string; name?: string }>): Promise<AndroidImageRef[]>
+  /** Present on the local backend too; accepted as an alternative entry. */
+  saveImage?(input: { data: Uint8Array; mediaType: string; name?: string }): Promise<AndroidImageRef>
 }
 
 /** Structural face of the `llm` service's model-info resolution. */
@@ -67,19 +78,71 @@ interface ContextLike {
 }
 
 /**
+ * Can this store commit an image? The mounted local backend carries BOTH
+ * `saveImages` (documented batch entry) and `saveImage` (single-image), and
+ * they live on a subclass of the kernel's AttachmentStore, so probing for
+ * either one is correct — probing for exactly one is how the seam silently
+ * switches itself off.
+ */
+function supportsImageCommit(store: AttachmentStoreLike): boolean {
+  return typeof store.saveImages === 'function' || typeof store.saveImage === 'function'
+}
+
+/**
  * Resolve the optional vision services from the plugin context. Both come
  * back undefined on hosts that do not mount them; every consumer treats
  * that as "stay text-only".
  */
-export function resolveVisionServices(ctx: unknown): AndroidVisionServices {
-  const get = (ctx as ContextLike)?.get?.bind(ctx)
+/** True when this ctx can hand back a service (cordis' inject-free reader). */
+function readerOf(ctx: unknown): ((name: string) => unknown) | undefined {
+  return (ctx as ContextLike)?.get?.bind(ctx)
+}
+
+/**
+ * Read the vision services NOW, tolerating late activation.
+ *
+ * cordis' `ctx.get(name)` defaults to `strict = true`, which returns
+ * `undefined` unless the PROVIDING fiber is currently active (state 2). A
+ * plugin's `apply()` can run before a bare dependency — `attachments` is an
+ * OPTIONAL service here (see package.json dshHostRuntime.optionalServices), so
+ * nothing orders it first — and anything captured at apply() time then stays
+ * undefined for the life of the process, silently disabling image delivery
+ * with no error anywhere.
+ *
+ * So each access re-reads instead of caching: by the time a tool actually
+ * captures (minutes later, on a live session) the provider is active.
+ */
+function readNow(ctx: unknown): AndroidVisionServices {
+  const get = readerOf(ctx)
   if (get === undefined) return {}
   const attachments = get('attachments') as AttachmentStoreLike | undefined
   const llm = get('llm') as LlmServiceLike | undefined
   return {
-    ...(attachments !== undefined && typeof attachments.saveImage === 'function' ? { attachments } : {}),
+    ...(attachments !== undefined && supportsImageCommit(attachments) ? { attachments } : {}),
     ...(llm !== undefined && typeof llm.resolveModelInfo === 'function' ? { llm } : {}),
   }
+}
+
+/**
+ * Resolve the optional vision services from the plugin context.
+ *
+ * Returns a LIVE view: `attachments` and `llm` are getters that re-resolve on
+ * every access, so a provider that activates after this plugin still becomes
+ * visible. Callers keep the same shape and the same "undefined means stay
+ * text-only" contract — they simply stop sampling once, at the worst moment,
+ * and freezing the answer.
+ */
+export function resolveVisionServices(ctx: unknown): AndroidVisionServices {
+  if (readerOf(ctx) === undefined) return {}
+  const services = {
+    get attachments(): AttachmentStoreLike | undefined {
+      return readNow(ctx).attachments
+    },
+    get llm(): LlmServiceLike | undefined {
+      return readNow(ctx).llm
+    },
+  }
+  return services
 }
 
 /**
@@ -117,7 +180,12 @@ export async function saveScreenshotAttachment(
   const attachments = services.attachments
   if (attachments === undefined) return undefined
   try {
-    const ref = await attachments.saveImage({ data: png, mediaType: 'image/png', name })
+    const input = { data: png, mediaType: 'image/png', name }
+    // Prefer the documented batch entry; fall back to the single-image one,
+    // which the local backend also exposes.
+    const ref = typeof attachments.saveImages === 'function'
+      ? (await attachments.saveImages([input]))?.[0]
+      : await attachments.saveImage?.(input)
     if (typeof ref?.attachmentId !== 'string' || ref.attachmentId === '') return undefined
     return {
       attachmentId: ref.attachmentId,
