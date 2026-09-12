@@ -32,6 +32,7 @@
  */
 
 import type { AdbToolchain } from './adb.js'
+import { screenFingerprint } from './screen-fingerprint.js'
 
 /** Compact tree output cap: past this the deepest levels are pruned. */
 export const UI_TREE_CAP_BYTES = 40 * 1024
@@ -405,11 +406,21 @@ export async function dumpUiTreeXml(
   const timeoutMs = options.timeoutMs ?? DUMP_TIMEOUT_MS
   const execOptions = { timeoutMs, maxBuffer: DUMP_MAX_BUFFER, ...(options.signal === undefined ? {} : { signal: options.signal }) }
   let primaryFailure: string | undefined
-  // "could not get idle state" earns exactly one retry after a short pause:
-  // a transient animation (screen-on ripple, app launch) settles in well
-  // under a second, while a CONTINUOUSLY animating foreground (a web page
-  // with a spinner is the classic case) will fail again — and then the
-  // error below routes the caller to OCR instead of a retry loop.
+  // "could not get idle state" earns at most one retry after a short pause: a
+  // transient animation (screen-on ripple, app launch) settles in well under a
+  // second, while a CONTINUOUSLY animating foreground (a web page with a
+  // spinner is the classic case) will fail again — and then the error below
+  // routes the caller to OCR instead of a retry loop.
+  //
+  // Cost note (measured on a 1536x2560 device): one dump is ~2.4 s and the
+  // worst case — two primary attempts, the 800 ms pause, then the /sdcard
+  // fallback — is ~8.1 s, i.e. 3.4x the happy path. The retry is therefore
+  // GATED rather than blind: a ~130 ms screen fingerprint decides whether the
+  // screen actually moved while we waited. If it did not move, the same
+  // foreground is animating the same way and a second 2.4 s dump is provably
+  // wasted, so we go straight to the fallback (which writes a file and reads
+  // it back — a genuinely different code path, not a repeat).
+  const beforeRetry = await screenFingerprint(toolchain, serial)
   for (let attempt = 0; attempt < 2; attempt += 1) {
     try {
       const buffer = await toolchain.execOut(serial, ['uiautomator', 'dump', '/dev/tty'], execOptions)
@@ -418,7 +429,12 @@ export async function dumpUiTreeXml(
       primaryFailure = error instanceof Error ? error.message : String(error)
       if (attempt === 0 && /could not get idle state/i.test(primaryFailure)) {
         await new Promise(resolve => setTimeout(resolve, 800))
-        continue
+        const after = await screenFingerprint(toolchain, serial)
+        // Unknown digest (fingerprint unavailable) must NOT be read as
+        // "unchanged": retry, because the cheap signal failed, not the screen.
+        if (after.digest === '' || after.digest !== beforeRetry.digest) continue
+        primaryFailure = `${primaryFailure} (the screen did not change during the 800 ms settle, so a `
+          + 'second identical dump was skipped)'
       }
       break
     }

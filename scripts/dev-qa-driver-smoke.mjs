@@ -21,7 +21,7 @@
 
 import { readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
-import { fileURLToPath } from 'node:url'
+import { fileURLToPath, pathToFileURL } from 'node:url'
 import { createStepReporter, expectThrow, TINY_PNG_B64 } from './_smoke-harness.mjs'
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..')
@@ -30,7 +30,8 @@ const { step, finish } = createStepReporter()
 
 let driver
 try {
-  driver = await import(join(root, 'lib', 'qa-driver.js'))
+  // pathToFileURL: a bare Windows path is rejected by the ESM loader.
+  driver = await import(pathToFileURL(join(root, 'lib', 'qa-driver.js')).href)
 } catch (error) {
   step('import lib/qa-driver.js', 'SKIP', 'build not available yet: ' + (error instanceof Error ? error.message : String(error)))
   console.log('SKIPPED — run pnpm run build (or re-run after integration) and try again.')

@@ -36,7 +36,7 @@
 import { mkdtempSync, readFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
-import { fileURLToPath } from 'node:url'
+import { fileURLToPath, pathToFileURL } from 'node:url'
 import {
   TINY_PNG_B64,
   createStepReporter,
@@ -46,6 +46,13 @@ import {
 } from './_smoke-harness.mjs'
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..')
+
+/**
+ * Import URL for one compiled lib module. A bare Windows path ("C:\...") is
+ * rejected by the ESM loader ("Received protocol 'c:'"), which is why these
+ * suites used to SKIP on Windows; pathToFileURL is the portable form.
+ */
+const libUrl = file => pathToFileURL(join(root, 'lib', file)).href
 
 // ── the real emulator capture (see the header) ───────────────────────────────
 // Split at element boundaries only; `join('')` reconstructs the exact bytes
@@ -182,12 +189,12 @@ const { step, finish } = createStepReporter()
 let lib
 try {
   const [uitree, listRows, toolUitree, toolRows, toolOcr, ocrBackend] = await Promise.all([
-    import(join(root, 'lib', 'uitree.js')),
-    import(join(root, 'lib', 'list-rows.js')),
-    import(join(root, 'lib', 'tool-uitree.js')),
-    import(join(root, 'lib', 'tool-list-rows.js')),
-    import(join(root, 'lib', 'tool-ocr.js')),
-    import(join(root, 'lib', 'ocr-backend.js')),
+    import(libUrl('uitree.js')),
+    import(libUrl('list-rows.js')),
+    import(libUrl('tool-uitree.js')),
+    import(libUrl('tool-list-rows.js')),
+    import(libUrl('tool-ocr.js')),
+    import(libUrl('ocr-backend.js')),
   ])
   lib = { uitree, listRows, toolUitree, toolRows, toolOcr, ocrBackend }
 } catch (error) {
