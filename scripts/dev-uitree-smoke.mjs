@@ -847,7 +847,29 @@ if (lib !== undefined) {
       ? typeof binary.available === 'boolean' && binary.installHint === OCR_INSTALL_HINT
       : binary.available === false && /macOS host/.test(binary.reason ?? '') && /android_ui_tree/.test(binary.reason ?? '')
     step(`resolveOcrBinary degrades explicitly on ${process.platform}`, ok, binary.reason?.slice(0, 90) ?? binary.source)
-    step('OCR install hint names the android tools', /android_find_text \/ android_tap_text \/ android_wait_for/.test(OCR_INSTALL_HINT))
+    // The legacy DSH_-prefixed names must keep steering resolution until 1.0: a
+  // user whose shell already exports them should not lose their override to a
+  // rename. (They can never work in a .env file either way — the host rejects
+  // that file before the plugin loads, which is why they are being retired.)
+  {
+    const priorNew = process.env.DSHPLUGIN_ANDROID_SWIFTC
+    const priorOld = process.env.DSH_ANDROID_SWIFTC
+    try {
+      delete process.env.DSHPLUGIN_ANDROID_SWIFTC
+      process.env.DSH_ANDROID_SWIFTC = '/nonexistent/swiftc-does-not-exist'
+      const legacy = resolveOcrBinary()
+      step(
+        'the legacy DSH_ANDROID_SWIFTC name still drives resolution',
+        legacy.available === false && String(legacy.reason).includes('/nonexistent/swiftc-does-not-exist'),
+        String(legacy.reason).slice(0, 90),
+      )
+    } finally {
+      if (priorOld === undefined) delete process.env.DSH_ANDROID_SWIFTC
+      else process.env.DSH_ANDROID_SWIFTC = priorOld
+      if (priorNew !== undefined) process.env.DSHPLUGIN_ANDROID_SWIFTC = priorNew
+    }
+  }
+  step('OCR install hint names the android tools', /android_find_text \/ android_tap_text \/ android_wait_for/.test(OCR_INSTALL_HINT))
   }
 
   rmSync(scratch, { recursive: true, force: true })

@@ -135,8 +135,8 @@ index.ts 照抄 dsh-ios/src/index.ts 的 ctx.effect 逐工具注册 + installStr
 ## OCR 移植（src/ocr-backend.ts）
 
 从 dsh-ios/src/ocr-backend.ts 移植：assets/ocr.swift 已复制（不改）。改动仅限：
-缓存 `~/Library/Caches/dsh-android/bin/ocr/…`、env 名 `DSH_ANDROID_OCR_DIR /
-DSH_ANDROID_OCR_SWIFT / DSH_ANDROID_SWIFTC`、错误前缀 dsh-android、
+缓存 `~/Library/Caches/dsh-android/bin/ocr/…`、env 名 `DSHPLUGIN_ANDROID_OCR_DIR /
+DSHPLUGIN_ANDROID_OCR_SWIFT / DSHPLUGIN_ANDROID_SWIFTC`、错误前缀 dsh-android、
 **删除 points 换算函数**（Android 只有像素空间：保留 pixelRectToNormalized /
 normalizedRectToPixels / rectCenter / filterOcrItems / parse / ensure / exec）。
 非 macOS 宿主 → resolveOcrBinary 报"OCR 需要 macOS 宿主的 Vision 框架"解释性错误。

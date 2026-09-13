@@ -46,13 +46,14 @@ import {
 import { homedir } from 'node:os'
 import { delimiter, dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { pluginEnv } from './plugin-env.js'
 
 /** Install hint appended to every helper-unavailable tool error. */
 export const OCR_INSTALL_HINT = 'the plugin compiles its bundled Vision OCR helper with swiftc on first use — '
   + 'install Xcode (or the Command Line Tools: run "xcode-select --install") so android_find_text / '
   + 'android_tap_text / android_wait_for can run'
 
-/** Cache base dir; `DSH_ANDROID_OCR_DIR` overrides it (tests/CI). */
+/** Cache base dir; `DSHPLUGIN_ANDROID_OCR_DIR` overrides it (tests/CI). */
 const OCR_CACHE_BASE = join(homedir(), 'Library', 'Caches', 'dsh-android', 'bin', 'ocr')
 /** Well-known swiftc locations, probed even with a trimmed PATH. */
 const SWIFTC_CANDIDATES = ['/usr/bin/swiftc', '/usr/local/bin/swiftc']
@@ -124,7 +125,7 @@ function sha256File(path: string): string {
 
 /** Plugin cache base dir for the compiled helper. */
 export function ocrCacheBase(): string {
-  const override = process.env.DSH_ANDROID_OCR_DIR
+  const override = pluginEnv('ANDROID_OCR_DIR')
   return override !== undefined && override.trim() !== '' ? override.trim() : OCR_CACHE_BASE
 }
 
@@ -135,13 +136,13 @@ function ocrCacheInstallDir(sourceSha256: string): string {
 
 /**
  * Resolve the bundled Swift source (`assets/ocr.swift`): an explicit
- * `DSH_ANDROID_OCR_SWIFT` override wins — and a bad override FAILS instead of
+ * `DSHPLUGIN_ANDROID_OCR_SWIFT` override wins — and a bad override FAILS instead of
  * silently falling through — then the path relative to this compiled module
  * (works from `lib/` in the repo and inside the installed package), then a
  * cwd-relative fallback for development working copies.
  */
 export function resolveOcrSwiftSource(): { path?: string; reason?: string } {
-  const explicit = process.env.DSH_ANDROID_OCR_SWIFT
+  const explicit = pluginEnv('ANDROID_OCR_SWIFT')
   if (explicit !== undefined && explicit.trim() !== '') {
     const candidate = explicit.trim()
     try {
@@ -149,7 +150,7 @@ export function resolveOcrSwiftSource(): { path?: string; reason?: string } {
     } catch {
       // Missing override → hard failure below.
     }
-    return { reason: `DSH_ANDROID_OCR_SWIFT points at a missing or unreadable file: ${candidate}` }
+    return { reason: `DSHPLUGIN_ANDROID_OCR_SWIFT points at a missing or unreadable file: ${candidate}` }
   }
   const candidates: string[] = []
   candidates.push(join(dirname(fileURLToPath(import.meta.url)), '..', 'assets', 'ocr.swift'))
@@ -166,10 +167,10 @@ export function resolveOcrSwiftSource(): { path?: string; reason?: string } {
 
 /** The swiftc compiler to use (explicit override → PATH → well-known). */
 function resolveSwiftc(): { command?: string; reason?: string } {
-  const explicit = process.env.DSH_ANDROID_SWIFTC
+  const explicit = pluginEnv('ANDROID_SWIFTC')
   if (explicit !== undefined && explicit.trim() !== '') {
     if (isExecutableFile(explicit.trim())) return { command: explicit.trim() }
-    return { reason: `DSH_ANDROID_SWIFTC points at a missing or non-executable file: ${explicit.trim()}` }
+    return { reason: `DSHPLUGIN_ANDROID_SWIFTC points at a missing or non-executable file: ${explicit.trim()}` }
   }
   const onPath = findOnPath('swiftc')
   if (onPath !== undefined) return { command: onPath }

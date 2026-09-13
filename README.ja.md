@@ -104,7 +104,7 @@ DSH Android は、会話の中でエージェントに本物の Android デバ�
 - **adb**（Android SDK platform-tools 付属）。解決順序は次のとおりです: `ADB` 環境変数 → `PATH` 上の `adb` → `<ANDROID_HOME>`/`<ANDROID_SDK_ROOT>`/OS ごとの既定 SDK ルート + `/platform-tools/adb`。`sdkmanager "platform-tools"`、Android Studio、または `brew install --cask android-platform-tools` でインストールできます。adb がなくてもプラグインはロードされ 20 個のツールも登録され、呼び出しのたびに何が足りないかを説明します。
 - **デバイス 1 台**: 製品を問わないエミュレータ、または USB デバッグを有効にした実機。`emulator` ランチャーは任意で、必要なのは「AVD 名で `android_boot` を呼ぶ」場合だけです——それ以外は adb から見えるデバイスであれば何でも動きます。
 - **パネルには DSH ≥ 0.1.0-rc.6 と Web バンドル**が必要です。ヘッドレスプロファイルでも動作します: 20 個のツールはすべて通常どおり機能し、ライブ映像だけがありません。
-- **OCR には macOS ホスト**（必要なのは `android_find_text` / `android_tap_text` / `android_wait_for` の 3 つだけ）: プラグインは初回使用時に同梱の `assets/ocr.swift` を `swiftc` で `~/Library/Caches/dsh-android/bin/ocr` にコンパイルします。Linux と Windows のホストでは、この 3 つのツールが OCR には macOS の Vision フレームワークが必要だと報告します。残りの 17 個は影響を受けません。上書き用の環境変数: `DSH_ANDROID_OCR_DIR`、`DSH_ANDROID_OCR_SWIFT`、`DSH_ANDROID_SWIFTC`。
+- **OCR には macOS ホスト**（必要なのは `android_find_text` / `android_tap_text` / `android_wait_for` の 3 つだけ）: プラグインは初回使用時に同梱の `assets/ocr.swift` を `swiftc` で `~/Library/Caches/dsh-android/bin/ocr` にコンパイルします。Linux と Windows のホストでは、この 3 つのツールが OCR には macOS の Vision フレームワークが必要だと報告します。残りの 17 個は影響を受けません。上書き用の環境変数: `DSHPLUGIN_ANDROID_OCR_DIR`、`DSHPLUGIN_ANDROID_OCR_SWIFT`、`DSHPLUGIN_ANDROID_SWIFTC`。
 - **ADBKeyboard**（任意。CJK と絵文字の入力用）: `adb shell input text` は ASCII しか扱えません。デバイスに [ADBKeyboard](https://github.com/senzhk/ADBKeyBoard) をインストールしてアクティブな IME に選ぶと、非 ASCII テキストがそのブロードキャストインターフェース経由で届きます。ない場合、非 ASCII の入力はインストールのヒント付きで**拒否**されます——黙って文字化けさせることは決してありません。
 
 ## 実機

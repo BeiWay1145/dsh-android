@@ -104,7 +104,7 @@ DSH Android 把一台真實的 Android 裝置交給智慧代理，同時把畫�
 - **adb**（來自 Android SDK platform-tools），解析順序如下：`ADB` 環境變數 → `PATH` 上的 `adb` → `<ANDROID_HOME>`/`<ANDROID_SDK_ROOT>`/各作業系統預設的 SDK 根目錄 + `/platform-tools/adb`。可用 `sdkmanager "platform-tools"`、Android Studio 或 `brew install --cask android-platform-tools` 安裝。沒有 adb 時外掛程式仍會載入、20 個工具照常註冊，每次呼叫都會說明缺少什麼。
 - **一台裝置**：任何產品的模擬器，或已開啟 USB 偵錯的手機。`emulator` 啟動器是可選的，只有「以 AVD 名稱呼叫 `android_boot`」需要它——其餘功能只要 adb 看得見裝置就能運作。
 - **DSH ≥ 0.1.0-rc.6 且使用 Web 版**，才能顯示面板。無頭（headless）設定同樣可用：20 個工具功能不變，只是沒有即時畫面。
-- **OCR 需要 macOS 主機**（只有 `android_find_text` / `android_tap_text` / `android_wait_for` 需要）：外掛程式在首次使用時用 `swiftc` 把隨套件的 `assets/ocr.swift` 編譯到 `~/Library/Caches/dsh-android/bin/ocr`。在 Linux 與 Windows 主機上，這三個工具會回報 OCR 需要 macOS 的 Vision 框架；其餘 17 個不受影響。覆寫項：`DSH_ANDROID_OCR_DIR`、`DSH_ANDROID_OCR_SWIFT`、`DSH_ANDROID_SWIFTC`。
+- **OCR 需要 macOS 主機**（只有 `android_find_text` / `android_tap_text` / `android_wait_for` 需要）：外掛程式在首次使用時用 `swiftc` 把隨套件的 `assets/ocr.swift` 編譯到 `~/Library/Caches/dsh-android/bin/ocr`。在 Linux 與 Windows 主機上，這三個工具會回報 OCR 需要 macOS 的 Vision 框架；其餘 17 個不受影響。覆寫項：`DSHPLUGIN_ANDROID_OCR_DIR`、`DSHPLUGIN_ANDROID_OCR_SWIFT`、`DSHPLUGIN_ANDROID_SWIFTC`。
 - **ADBKeyboard**（可選，用於 CJK 與 emoji 輸入）：`adb shell input text` 只支援 ASCII。在裝置上安裝 [ADBKeyboard](https://github.com/senzhk/ADBKeyBoard) 並選為使用中的輸入法後，非 ASCII 文字會透過其廣播介面投遞。沒有它時，非 ASCII 輸入會被**拒絕**並附上安裝提示——絕不會靜默打錯字。
 
 ## 實體裝置

@@ -10,7 +10,7 @@
 </p>
 
 <p align="center">
-  <sub>npm: <code>@zseven-w/dsh-android</code> &middot; Current plugin release: <code>0.1.0-rc.7</code> &middot; Tested with DSH <code>0.1.5-rc.1</code></sub>
+  <sub>npm: <code>@zseven-w/dsh-android</code> &middot; Current plugin release: <code>0.1.0-rc.8</code> &middot; Tested with DSH <code>0.1.5-rc.1</code></sub>
 </p>
 
 <p align="center">
@@ -104,7 +104,7 @@ Coordinates are **normalized 0..1 of the streamed frame** everywhere. The frame 
 - **adb**, from the Android SDK platform-tools, resolved in this order: the `ADB` environment variable → `adb` on `PATH` → `<ANDROID_HOME>`/`<ANDROID_SDK_ROOT>`/the per-OS default SDK root + `/platform-tools/adb`. Install it with `sdkmanager "platform-tools"`, with Android Studio, or with `brew install --cask android-platform-tools`. Without adb the plugin still loads and all 20 tools register; every call then explains what is missing.
 - **A device**: an emulator of any product, or a phone with USB debugging enabled. The `emulator` launcher is optional and only `android_boot`-by-AVD-name needs it — everything else works with whatever adb can see.
 - **DSH ≥ 0.1.0-rc.6 with the web bundle** for the panel. Headless profiles work too: all 20 tools function normally, just without the live view.
-- **macOS host for OCR** (only `android_find_text` / `android_tap_text` / `android_wait_for` need it): the plugin compiles its bundled `assets/ocr.swift` with `swiftc` on first use into `~/Library/Caches/dsh-android/bin/ocr`. On Linux and Windows hosts those three tools report that OCR needs the macOS Vision framework; the other 17 are unaffected. Overrides: `DSH_ANDROID_OCR_DIR`, `DSH_ANDROID_OCR_SWIFT`, `DSH_ANDROID_SWIFTC`.
+- **macOS host for OCR** (only `android_find_text` / `android_tap_text` / `android_wait_for` need it): the plugin compiles its bundled `assets/ocr.swift` with `swiftc` on first use into `~/Library/Caches/dsh-android/bin/ocr`. On Linux and Windows hosts those three tools report that OCR needs the macOS Vision framework; the other 17 are unaffected. Overrides: `DSHPLUGIN_ANDROID_OCR_DIR`, `DSHPLUGIN_ANDROID_OCR_SWIFT`, `DSHPLUGIN_ANDROID_SWIFTC`.
 - **ADBKeyboard** (optional, for CJK and emoji input): `adb shell input text` is ASCII-only. Install [ADBKeyboard](https://github.com/senzhk/ADBKeyBoard) on the device and select it as the active IME, and non-ASCII text is delivered through its broadcast interface. Without it, non-ASCII typing is REFUSED with the install hint — never silently mistyped.
 
 ## Physical devices

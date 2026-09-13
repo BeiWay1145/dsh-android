@@ -104,7 +104,7 @@ DSH Android는 대화 안에서 에이전트에게 진짜 Android 기기를 건�
 - **adb**(Android SDK platform-tools). 해석 순서는 `ADB` 환경 변수 → `PATH`의 `adb` → `<ANDROID_HOME>`/`<ANDROID_SDK_ROOT>`/OS별 기본 SDK 루트 + `/platform-tools/adb`입니다. `sdkmanager "platform-tools"`, Android Studio, 또는 `brew install --cask android-platform-tools`로 설치하세요. adb가 없어도 plugin은 로드되고 20개 도구가 모두 등록되며, 호출할 때마다 무엇이 없는지 설명합니다.
 - **기기 한 대**: 제품을 가리지 않는 에뮬레이터, 또는 USB 디버깅을 켠 휴대폰. `emulator` 런처는 선택 사항이며 'AVD 이름으로 `android_boot`를 호출'할 때만 필요합니다 — 그 외에는 adb가 볼 수 있는 기기라면 무엇이든 동작합니다.
 - **패널에는 웹 번들이 포함된 DSH ≥ 0.1.0-rc.6**이 필요합니다. 헤드리스 프로필도 동작합니다: 20개 도구는 모두 정상 작동하고 실시간 화면만 없습니다.
-- **OCR에는 macOS 호스트**가 필요합니다(`android_find_text` / `android_tap_text` / `android_wait_for`만 해당): plugin은 첫 사용 시 번들된 `assets/ocr.swift`를 `swiftc`로 `~/Library/Caches/dsh-android/bin/ocr`에 컴파일합니다. Linux와 Windows 호스트에서는 이 세 도구가 OCR에 macOS Vision 프레임워크가 필요하다고 보고하며, 나머지 17개는 영향을 받지 않습니다. 재정의: `DSH_ANDROID_OCR_DIR`, `DSH_ANDROID_OCR_SWIFT`, `DSH_ANDROID_SWIFTC`.
+- **OCR에는 macOS 호스트**가 필요합니다(`android_find_text` / `android_tap_text` / `android_wait_for`만 해당): plugin은 첫 사용 시 번들된 `assets/ocr.swift`를 `swiftc`로 `~/Library/Caches/dsh-android/bin/ocr`에 컴파일합니다. Linux와 Windows 호스트에서는 이 세 도구가 OCR에 macOS Vision 프레임워크가 필요하다고 보고하며, 나머지 17개는 영향을 받지 않습니다. 재정의: `DSHPLUGIN_ANDROID_OCR_DIR`, `DSHPLUGIN_ANDROID_OCR_SWIFT`, `DSHPLUGIN_ANDROID_SWIFTC`.
 - **ADBKeyboard**(선택, CJK와 이모지 입력용): `adb shell input text`는 ASCII만 지원합니다. 기기에 [ADBKeyboard](https://github.com/senzhk/ADBKeyBoard)를 설치하고 활성 IME로 선택하면 비 ASCII 텍스트가 그 브로드캐스트 인터페이스를 통해 전달됩니다. 없으면 비 ASCII 입력은 설치 힌트와 함께 **거부**됩니다 — 조용히 잘못 입력되는 일은 없습니다.
 
 ## 실기기
