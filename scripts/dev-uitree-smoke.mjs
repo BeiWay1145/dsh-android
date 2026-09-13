@@ -80,6 +80,24 @@ const FIXTURE_LINES = [
 ]
 const FIXTURE = FIXTURE_LINES.join('')
 
+/**
+ * What a MIUI/HyperOS image prints on stdout BEFORE the hierarchy XML: the
+ * vendor's ThemeCompatibilityLoader cannot open its theme config and dumps a
+ * Java stack trace into the same stream. Reproduced verbatim in shape from the
+ * Xiaomi Pad 5 capture in issue #6 — the point is the `<init>` frame, which
+ * makes this text contain a '<' well ahead of `<hierarchy`.
+ */
+const MIUI_STACK_TRACE = [
+  'java.io.FileNotFoundException: /data/system/theme_config/theme_compatibility.xml: open failed: ENOENT (No such file or directory)\n',
+  '\tat libcore.io.IoBridge.open(IoBridge.java:574)\n',
+  '\tat java.io.FileInputStream.<init>(FileInputStream.java:160)\n',
+  '\tat android.content.res.ThemeCompatibilityLoader.load(ThemeCompatibilityLoader.java:88)\n',
+  '\tat com.android.commands.uiautomator.Launcher.main(Launcher.java:88)\n',
+  'Caused by: android.system.ErrnoException: open failed: ENOENT (No such file or directory)\n',
+  '\tat libcore.io.Linux.open(Native Method)\n',
+  '\t... 4 more\n',
+].join('')
+
 /** A synthetic hierarchy for the gates the real Settings screen cannot show. */
 const SYNTHETIC = [
   '<?xml version=\'1.0\' encoding=\'UTF-8\' standalone=\'yes\' ?>',
@@ -261,6 +279,30 @@ if (lib !== undefined) {
     step('extractHierarchyXml strips the trailer', xml.endsWith('</hierarchy>') && !xml.includes('UI hierchary'))
     step('extractHierarchyXml normalizes CRLF from a tty', extractHierarchyXml(FIXTURE.replace(/\n/g, '\r\n')).endsWith('</hierarchy>'))
     step('extractHierarchyXml keeps an empty self-closed hierarchy', extractHierarchyXml('<?xml?><hierarchy rotation="0"/>ok') === '<hierarchy rotation="0"/>')
+    // MIUI/HyperOS writes a ThemeCompatibilityLoader stack trace to the SAME
+    // stream, ahead of the XML, and its frames contain '<' — so anchoring on
+    // the first '<' in the buffer prepends ~2 KB of Java to the document and
+    // the parser yields nothing (issue #6, Xiaomi Pad 5 / Android 13).
+    const polluted = MIUI_STACK_TRACE + FIXTURE
+    const pollutedXml = extractHierarchyXml(polluted)
+    step(
+      'MIUI stack trace ahead of the XML does not become the document start',
+      pollutedXml.startsWith('<hierarchy') && !pollutedXml.includes('java.io.') && !pollutedXml.includes('\tat '),
+      `first '<' sat at ${polluted.indexOf('<')}, '<hierarchy' at ${polluted.indexOf('<hierarchy')}`,
+    )
+    step('a polluted stream extracts byte-identically to a clean one', pollutedXml === extractHierarchyXml(FIXTURE))
+    step(
+      'a polluted stream parses to the same tree',
+      (() => {
+        const tree = parseUiTree(pollutedXml)
+        const bounds = screenBoundsOf(tree.roots)
+        return tree.roots.length === 1 && bounds.width === 1080 && bounds.height === 2400
+      })(),
+    )
+    step(
+      'a closing tag with no open tag still reaches the parser',
+      extractHierarchyXml('noise <b>x</b> junk</hierarchy>').endsWith('</hierarchy>'),
+    )
   }
   expectThrow(
     step,
@@ -546,6 +588,34 @@ if (lib !== undefined) {
         && !/no accessibility information/.test(filtered.hint ?? ''),
       filtered.hint?.slice(0, 80),
     )
+
+    // issue #6 end to end: the vendor noise arrives on the same stream as the
+    // XML, so the tool must read the screen exactly as it does on a clean one.
+    {
+      const miui = makeFakeHost(MIUI_STACK_TRACE + extractHierarchyXml(FIXTURE))
+      const miuiTools = createAndroidUiTools(miui.host, { cacheDir: scratch })
+      const miuiTree = await miuiTools.androidUiTree.execute({}, makeExec('android_ui_tree', {}))
+      step(
+        'android_ui_tree reads a MIUI-polluted dump like a clean one',
+        miuiTree.screen.width === 1080 && miuiTree.screen.height === 2400
+          && miuiTree.nodeCount === fixtureNodeCount && miuiTree.hint === undefined,
+        `${miuiTree.screen.width}x${miuiTree.screen.height}, nodeCount=${miuiTree.nodeCount}, hint=${miuiTree.hint ?? 'none'}`,
+      )
+    }
+
+    // A dump that really does parse to nothing is a broken document, not a
+    // screen without accessibility support — the hint must not route to OCR.
+    {
+      const empty = makeFakeHost('<hierarchy rotation="0"/>')
+      const emptyTools = createAndroidUiTools(empty.host, { cacheDir: scratch })
+      const emptyTree = await emptyTools.androidUiTree.execute({}, makeExec('android_ui_tree', {}))
+      step(
+        'a zero-node dump is blamed on the dump, not on the app',
+        emptyTree.nodeCount === 0 && /malformed hierarchy document/.test(emptyTree.hint ?? '')
+          && !/no accessibility information/.test(emptyTree.hint ?? ''),
+        emptyTree.hint?.slice(0, 80),
+      )
+    }
 
     const tapped = await tools.androidTapElement.execute({ label: 'Battery' }, makeExec('android_tap_element', {}))
     const expectedTap = {

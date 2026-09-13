@@ -350,13 +350,27 @@ export function parseUiTree(xml: string): ParsedUiTree {
  * writes the XML and then its own confirmation line ("UI hierchary dumped to:
  * /dev/tty" — the typo is upstream's) onto the SAME stream, and a tty may
  * translate `\n` into `\r\n` on the way out.
+ *
+ * The document is anchored on its `<hierarchy` open tag, NOT on the first `<`
+ * in the buffer: vendor images write their own noise to that same stream
+ * BEFORE the XML, and that noise can itself contain a `<`. MIUI/HyperOS is the
+ * measured case — `ThemeCompatibilityLoader` fails to open
+ * /data/system/theme_config/theme_compatibility.xml and dumps a Java stack
+ * trace whose frames read `java.io.FileInputStream.<init>(...)`; slicing from
+ * the first `<` there prepends ~2 KB of stack trace to the document and the
+ * parser yields zero nodes (reported as an empty tree at 0x0).
  */
 export function extractHierarchyXml(raw: string): string {
   const text = raw.replace(/\r\n/g, '\n')
   const end = text.lastIndexOf('</hierarchy>')
   if (end >= 0) {
-    const start = text.indexOf('<')
-    return text.slice(start < 0 ? 0 : start, end + '</hierarchy>'.length)
+    const start = text.indexOf('<hierarchy')
+    if (start >= 0 && start < end) return text.slice(start, end + '</hierarchy>'.length)
+    // Closing tag but no open tag: hand the parser the loosest plausible
+    // document rather than nothing, so a malformed-but-recoverable dump still
+    // has a chance (and a truly broken one surfaces as a zero-node tree).
+    const looseStart = text.indexOf('<')
+    return text.slice(looseStart < 0 ? 0 : looseStart, end + '</hierarchy>'.length)
   }
   // A self-closed or empty hierarchy still counts as a valid (if useless) dump.
   const empty = /<hierarchy\b[^>]*\/>/.exec(text)

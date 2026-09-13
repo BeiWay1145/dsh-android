@@ -530,6 +530,20 @@ function filterMissHint(filter: string): string {
     + 'actually there.'
 }
 
+/**
+ * The dump parsed to NO node at all. A live window always has at least one, so
+ * this is a broken document rather than a bare screen — an unreadable dump or
+ * vendor output interleaved with the XML (MIUI/HyperOS prepends a Java stack
+ * trace to the same stream). Saying "no accessibility information" here would
+ * send the reader at OCR for a fault that OCR does not explain.
+ */
+function emptyDumpHint(): string {
+  return 'The dump parsed to zero nodes, which a live window never does — this is a malformed hierarchy '
+    + 'document, not a screen without accessibility information. The usual cause is vendor output written '
+    + 'into the same stream as the XML; re-run the tool once, and if it stays empty report the device model '
+    + 'and Android build so the dump can be captured raw.'
+}
+
 /** Case (b): the output cap pruned the deepest levels, so labels may be missing. */
 function capPrunedUnlabeledHint(): string {
   return 'The tree was pruned to fit the output cap, so the surviving levels carry no labels — the labeled '
@@ -559,6 +573,8 @@ export function buildTreeResult(
   const filterText = args.filter !== undefined ? args.filter.trim() : ''
   if (filterText !== '' && built.count === 0) {
     hints.push(filterMissHint(filterText))
+  } else if (nodeCount === 0) {
+    hints.push(emptyDumpHint())
   } else if (!hasLabeledNode(capped.tree)) {
     if (capped.truncated) hints.push(capPrunedUnlabeledHint())
     else hints.push(OCR_FALLBACK_HINT)
