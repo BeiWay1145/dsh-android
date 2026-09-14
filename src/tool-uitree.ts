@@ -55,6 +55,7 @@ import {
   readUiTree,
   resolveTapTarget,
   screenBoundsOf,
+  treePixelToInput,
   type UiBounds,
   type UiTreeNode,
   type UiTreeToolchain,
@@ -97,6 +98,12 @@ export interface AndroidToolHost {
   tap(serial: string, x: number, y: number): Promise<void>
   /** Capture a fresh PNG, independent of the stream loop. */
   screenshot(serial: string): Promise<{ png: Buffer; width?: number; height?: number }>
+  /**
+   * The display space `input` addresses. Tree pixels live in the app frame,
+   * which differs from this by the system-bar inset (measured 1500 vs 1536),
+   * so a tap must convert before normalizing.
+   */
+  inputSpace(serial: string): Promise<{ width: number; height: number }>
 }
 
 /** Device summary carried by every tool result and presentationMeta. */
@@ -918,9 +925,13 @@ export function createAndroidUiTools(host: AndroidToolHost, options: AndroidUiTo
         )
       }
       const center = boundsCenter(node.bounds)
-      // Pixel center → normalized 0..1 of the SAME display space the stream
-      // and `input tap` share (docs/contract.zh.md: no rotation inverse).
-      const tap = { x: round4(center.x / screen.width), y: round4(center.y / screen.height) }
+      // The dump reports the APP frame (measured 2560x1500) while `input` and
+      // the stream share the FULL display (2560x1536). Convert the pixel into
+      // input space FIRST, then normalize by that same space — normalizing by
+      // the tree height and multiplying back by the frame height is what made
+      // every tap land up to 35 px low.
+      const input = await host.inputSpace(device.serial)
+      const tap = treePixelToInput(center, input, round4)
       try {
         await host.tap(device.serial, tap.x, tap.y)
       } catch (error) {

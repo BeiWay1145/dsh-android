@@ -19,3 +19,10 @@ coverage/
 
 # Local visual acceptance evidence may contain workspace or conversation data.
 artifacts/
+
+# Android bridge build outputs — regenerate with scripts/build-bridge*.ps1
+android-bridge/build/
+android-bridge/dsh-bridge.apk
+android-bridge/dsh-bridge.apk.idsig
+# Debug signing key: local only, never shipped or shared.
+android-bridge/debug.keystore

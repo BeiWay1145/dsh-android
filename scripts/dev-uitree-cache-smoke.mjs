@@ -48,6 +48,9 @@ function makeHost() {
     toolchain,
     async resolveTarget() { return { serial: 'FAKE', state: 'device', model: 'Fake' } },
     async screenshot() { return { png: Buffer.from(''), width: 10, height: 10 } },
+    // Kept intentionally different from the fixture tree so the app-frame vs
+    // full-display divisor mismatch cannot silently come back.
+    async inputSpace() { return { width: 1080, height: 2400 } },
     async tap() {},
     async type() {},
     async button() {},

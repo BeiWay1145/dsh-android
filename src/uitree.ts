@@ -521,6 +521,50 @@ export function screenBoundsOf(roots: readonly UiTreeNode[]): { width: number; h
 }
 
 /**
+ * The display space the `input` command actually uses.
+ *
+ * MEASURED DIVERGENCE (Xiaomi Pad 5, MIUI 14, landscape):
+ *   `uiautomator dump` root bounds  = 2560 x 1500   <- the APP frame
+ *   `wm size` / `screencap` PNG     = 2560 x 1536   <- the FULL display
+ *
+ * The two spaces share an ORIGIN (both start at 0,0) and differ only in extent:
+ * the app frame is the display minus the system bars, which are at the far edge.
+ * Verified on the device — a tap sent at the tree's own pixel lands correctly,
+ * so no coordinate translation is needed, only the right denominator.
+ *
+ * The bug this documents: tap tools normalized with the TREE height (1500) while
+ * the host multiplied the result back by the LIVE FRAME height (1536). A
+ * mismatched denominator pair scales every tap by 1536/1500 = 1.024, so a target
+ * at y=1418 was tapped at 1452 — 34 px low, and anything within ~35 px of the
+ * app-frame's bottom edge fell outside the app frame, where the system gesture
+ * strip swallowed it (observed as "the tap silently did nothing").
+ */
+export interface InputSpace {
+  /** The display size `input` uses (full display, orientation-aware). */
+  width: number
+  height: number
+}
+
+/**
+ * A pixel from a UI-tree node → normalized 0..1 of the `input` space.
+ *
+ * The pixel itself is NOT rescaled: the tree's pixel grid and the input grid
+ * share an origin and a scale (verified: tapping the tree's own pixels works).
+ * Only the denominator must be the input space, because that is what the host
+ * multiplies by to get back to pixels.
+ */
+export function treePixelToInput(
+  pixel: { x: number; y: number },
+  input: InputSpace,
+  round: (value: number) => number,
+): { x: number; y: number } {
+  return {
+    x: round(pixel.x / input.width),
+    y: round(pixel.y / input.height),
+  }
+}
+
+/**
  * True when `bounds` lies ENTIRELY outside the screen. uiautomator keeps
  * scrolled-out rows in the dump with their real (off-screen) coordinates and
  * exposes no visibility flag, so geometry is the only signal — the same

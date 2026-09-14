@@ -35,6 +35,7 @@ function makeHost() {
     },
     available: true,
     async resolveTarget() { return { serial: 'FAKE123', state: 'device', model: 'Fake' } },
+    async inputSpace() { return { width: 1080, height: 2400 } },
     async screenshot() {
       return { png: PNG, width: 1080, height: 2400 }
     },

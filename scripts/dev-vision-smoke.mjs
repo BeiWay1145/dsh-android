@@ -142,6 +142,7 @@ const fakeHost = {
     return { serial: 'emulator-5554', state: 'device', emulator: true, model: 'sdk gphone64 arm64' }
   },
   async screenshot() { return { png: TINY_PNG, width: 1, height: 1 } },
+  async inputSpace() { return { width: 1, height: 1 } },
 }
 
 import { mkdtempSync } from 'node:fs'

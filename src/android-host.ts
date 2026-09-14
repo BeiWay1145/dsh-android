@@ -529,6 +529,23 @@ export class AndroidHostController {
     }
   }
 
+  /**
+   * The display space `input` addresses (full display, orientation-aware).
+   *
+   * This is the SAME source `#pixels` uses, exposed so a caller that holds a
+   * coordinate in another space (the UI tree's app-frame pixels) can convert
+   * into input space BEFORE normalizing. The two used to be mixed implicitly:
+   * tools normalized by the tree height while `#pixels` multiplied by the live
+   * frame height, which silently rescaled every tap.
+   *
+   * Falls back to `wm size` when no stream is running, exactly as `#pixels` does.
+   */
+  async inputSpace(serial: string): Promise<{ width: number; height: number }> {
+    const frame = this.streamedSerial === serial ? this.latestFrame : undefined
+    if (frame !== undefined) return { width: frame.width, height: frame.height }
+    return this.toolchain.screenSize(serial)
+  }
+
   /** Normalized frame coordinates → `input` pixels via the live frame size. */
   async #pixels(serial: string, x: number, y: number): Promise<{ x: number; y: number }> {
     const frame = this.streamedSerial === serial ? this.latestFrame : undefined

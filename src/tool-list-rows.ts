@@ -62,6 +62,7 @@ import {
   hasLabeledNode,
   readUiTree,
   screenBoundsOf,
+  treePixelToInput,
   type UiTreeNode,
 } from './uitree.js'
 import { IMAGE_REF_SCHEMA, renderJsonWithImage } from './vision.js'
@@ -406,10 +407,11 @@ export function createAndroidRowTools(host: AndroidToolHost, options: AndroidUiT
           + 'android_ui_rows once the screen is on and settled',
         )
       }
-      const tap = {
-        x: round4(plan.tap.x / sample.screen.width),
-        y: round4(plan.tap.y / sample.screen.height),
-      }
+      // Same app-frame vs input-space divergence as android_tap_element: the
+      // row frame comes from the dump (app frame) while `input` addresses the
+      // full display. Convert before normalizing, or every row tap lands low.
+      const input = await host.inputSpace(device.serial)
+      const tap = treePixelToInput(plan.tap, input, round4)
       try {
         await host.tap(device.serial, tap.x, tap.y)
       } catch (error) {

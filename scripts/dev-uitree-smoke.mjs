@@ -562,6 +562,13 @@ if (lib !== undefined) {
         async screenshot() {
           return { png: Buffer.from(TINY_PNG_B64, 'base64'), width: 1, height: 1 }
         },
+        // The input space the fake device reports. Deliberately DIFFERENT from
+        // this fixture's tree height so the app-frame vs full-display divergence
+        // that caused the tap-drift bug stays covered: normalizing by the tree
+        // height while the host multiplies by this would skew every tap.
+        async inputSpace() {
+          return { width: 1080, height: 2400 }
+        },
       },
     }
   }

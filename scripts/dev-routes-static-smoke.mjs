@@ -117,6 +117,7 @@ function makeFakeHost({ streamed = 'emulator-5554', devices = DEVICES } = {}) {
         return devices.filter(device => device.state === 'device').map(device => ({ ...device }))
       },
     },
+    async inputSpace() { return { width: 1, height: 1 } },
     async screenshot(serial) {
       calls.push(`screenshot ${serial}`)
       return { png: TINY_PNG, width: 1, height: 1 }

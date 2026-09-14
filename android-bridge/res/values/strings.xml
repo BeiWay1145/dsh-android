@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">DSH Bridge</string>
+    <string name="service_description">Lets DSH read the screen hierarchy quickly. Falls back to uiautomator when disabled.</string>
+</resources>
