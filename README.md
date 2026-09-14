@@ -24,6 +24,13 @@
 </p>
 <p align="center"><sub>An Android device streamed and controlled from inside a DSH conversation — the agent's tool call in the center, the live device panel on the right</sub></p>
 
+> **Fork note.** This is a fork of the upstream plugin (see [FORK.md](./FORK.md)).
+> In addition to the upstream tools it ships an **optional** on-device bridge that
+> cuts a UI-tree read from ~2.4 s to ~3 ms — a 20x speed-up at the tool layer —
+> and fixes a tap-coordinate bug where every tap landed up to 35 px low.
+> The bridge is entirely optional: without it installed, everything behaves
+> exactly as upstream, just slower. See **[docs/bridge.md](./docs/bridge.md)**.
+
 ## Why DSH Android
 
 DSH Android gives the agent a real Android device inside the conversation — and gives you the pixels. The agent can start a stream on an emulator or a USB-connected phone, build and install a Gradle project, drive the UI by `resource-id`/text or by OCR, read logcat, and inspect processes and memory, while a live stream of the device renders in a persistent sidebar panel where you can tap, drag, rotate, and press Back / Home / Recents directly on the video. No image blocks and no screen-recording files: visual bytes reach the UI only through signed, expiring URLs served by the DSH webserver.
