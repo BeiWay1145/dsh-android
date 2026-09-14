@@ -757,7 +757,10 @@ function buildActionableResult(
   if (dropped > 0) {
     hints.push(
       'This is the ACTIONABLE view: ' + dropped + ' unlabeled structural node(s) were collapsed '
-      + 'and ' + rows.length + ' addressable node(s) are listed flat with their original depth. '
+      + 'and ' + rows.length + ' addressable node(s) are listed flat in depth-first order, each with '
+      + 'its depth in THIS collapsed view (a deeper row is a child of the previous row, so the tree can '
+      + 'be rebuilt). Those depths are not the original nesting: collapsing a container promotes its '
+      + 'children. '
       + 'Pass view: \"full\" if you need every container and the exact nesting.',
     )
   }
