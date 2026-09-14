@@ -709,6 +709,158 @@ export function capTreeToBytes(
   return { tree, truncated }
 }
 
+/**
+ * Fit a compact tree under `capBytes` WITHOUT silently deleting information.
+ *
+ * The old strategy pruned the deepest level outright, which is the worst choice
+ * twice over: that level holds the MOST SPECIFIC controls (the button inside the
+ * row), and the caller received a tree that LOOKS complete while an arbitrary set
+ * of controls had vanished. The hint said \"deepest levels were pruned\" but never
+ * which ones, so a model could act on an incomplete picture without knowing it.
+ *
+ * This SHRINKS instead of severing: it keeps as many siblings per level as fit,
+ * preferring ADDRESSABLE ones, and records exactly what it dropped so the caller
+ * knows the tree is a sample and where the gaps are.
+ *
+ * Mutates the nodes it is handed (they are already the tool's private copies).
+ */
+export function capTreeToBytesSafely(
+  tree: UiTreeNode[],
+  capBytes: number = UI_TREE_CAP_BYTES,
+): { tree: UiTreeNode[]; truncated: boolean; elisions: string[] } {
+  const elisions: string[] = []
+  const bytes = (): number => Buffer.byteLength(JSON.stringify(tree), 'utf8')
+  if (bytes() <= capBytes) return { tree, truncated: false, elisions }
+  const addressable = (node: UiTreeNode): boolean =>
+    (node.text !== undefined && node.text !== '')
+    || (node.contentDesc !== undefined && node.contentDesc !== '')
+    || (node.resourceId !== undefined && node.resourceId !== '')
+    || node.clickable === true
+
+  // Thin sibling lists deepest-first, keeping addressable siblings ahead of
+  // scaffolding, until the tree fits or no container has anything left to cut.
+  const containers: UiTreeNode[] = []
+  const collect = (nodes: readonly UiTreeNode[]): void => {
+    for (const node of nodes) {
+      if (node.children.length > 0) containers.push(node)
+      collect(node.children)
+    }
+  }
+  collect(tree)
+  // Deepest first: cutting there removes the least structure per byte saved.
+  const depthOf = (node: UiTreeNode, from: readonly UiTreeNode[], d: number): number => {
+    for (const n of from) {
+      if (n === node) return d
+      const found = depthOf(node, n.children, d + 1)
+      if (found >= 0) return found
+    }
+    return -1
+  }
+  containers.sort((a, b) => depthOf(b, tree, 0) - depthOf(a, tree, 0))
+  for (const container of containers) {
+    if (bytes() <= capBytes) break
+    while (container.children.length > 1 && bytes() > capBytes) {
+      const ranked = [...container.children].sort(
+        (a, b) => Number(addressable(a)) - Number(addressable(b)),
+      )
+      const victim = ranked[0]!
+      const at = container.children.indexOf(victim)
+      if (at < 0) break
+      container.children.splice(at, 1)
+      const label = container.type
+        + (container.resourceId === undefined ? '' : ' (' + container.resourceId + ')')
+      elisions.push(
+        1 + ' node under ' + label
+        + (addressable(victim) ? ' (addressable)' : '') + ' was omitted.',
+      )
+    }
+  }
+  const truncated = bytes() > capBytes
+  if (truncated) {
+    elisions.push('The hierarchy is still above the output budget; narrow it with filter or max_depth.')
+  }
+  return { tree, truncated: truncated || elisions.length > 0, elisions }
+}
+
+/**
+ * Render elisions as a SHORT grouped summary.
+ *
+ * Reporting what was dropped is right; reporting it once per dropped subtree is
+ * not — a dense calendar screen produced 102 near-identical lines and 10.6 KB of
+ * hint, a third of the budget it was describing and exactly the bloat this work
+ * is meant to remove. Grouping by container turns that into a few lines.
+ */
+export function summarizeElisions(elisions: readonly string[], maxGroups = 4): string {
+  if (elisions.length === 0) return ''
+  const counts = new Map<string, number>()
+  let other = 0
+  for (const line of elisions) {
+    const m = /^1 node under ([^(]+?)(?: \(([^)]+)\))?( \(addressable\))? was omitted\.$/.exec(line)
+    if (m === null) { other += 1; continue }
+    const key = m[1]!.trim() + (m[2] === undefined ? '' : ' (' + m[2] + ')')
+    counts.set(key, (counts.get(key) ?? 0) + 1)
+  }
+  const top = [...counts.entries()].sort((a, b) => b[1] - a[1]).slice(0, maxGroups)
+  const parts = top.map(([key, n]) => n + ' under ' + key)
+  const rest = counts.size - top.length + other
+  return 'Omitted: ' + parts.join('; ')
+    + (rest > 0 ? '; and ' + rest + ' other container(s)' : '') + '.'
+}
+/**
+ * True when a node carries something an agent can ACT on or decide WITH.
+ *
+ * A node with no text, no content-desc and no resource-id is not addressable:
+ * the agent cannot name it, cannot ask for it, and cannot tell it apart from its
+ * siblings. Those are what make a full dump expensive without adding a handle.
+ * Measured on one 188-node screen: 160 nodes had a label, 3 were
+ * clickable-but-unlabeled, and the rest were structural scaffolding.
+ */
+function isActionable(node: UiTreeNode): boolean {
+  return (node.text !== undefined && node.text !== '')
+    || (node.contentDesc !== undefined && node.contentDesc !== '')
+    || (node.resourceId !== undefined && node.resourceId !== '')
+    || node.clickable === true
+    || node.scrollable === true
+}
+
+/**
+ * Collapse the tree to addressable nodes, keeping each one's original depth.
+ *
+ * An unlabeled single-child chain is pure pass-through: it has no handle and its
+ * one child occupies the same place, so promoting the child loses nothing.
+ * Nodes with SEVERAL children are kept even when unlabeled, because they carry
+ * the grouping an agent needs to tell which control belongs to which row.
+ *
+ * Depth is returned rather than nested children: the braces and the repeated
+ * 'children' key are most of what makes the nested form large.
+ */
+export function buildActionableView(roots: readonly UiTreeNode[]): {
+  nodes: Array<{ depth: number; node: UiTreeNode }>
+  kept: number
+  dropped: number
+} {
+  const nodes: Array<{ depth: number; node: UiTreeNode }> = []
+  let kept = 0
+  let dropped = 0
+  const visit = (start: UiTreeNode, startDepth: number): void => {
+    let current = start
+    let depth = startDepth
+    while (!isActionable(current) && (current.children?.length ?? 0) === 1) {
+      dropped += 1
+      current = current.children![0]!
+      depth += 1
+    }
+    if (isActionable(current)) {
+      kept += 1
+      nodes.push({ depth, node: current })
+    } else {
+      dropped += 1
+    }
+    for (const child of current.children ?? []) visit(child, depth + 1)
+  }
+  for (const root of roots) visit(root, 0)
+  return { nodes, kept, dropped }
+}
 /** True when the tree carries at least one labeled node (text or content-desc). */
 export function hasLabeledNode(nodes: readonly UiTreeNode[]): boolean {
   for (const node of nodes) {

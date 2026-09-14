@@ -582,6 +582,25 @@ if (lib !== undefined) {
         && tools.androidTapElement.name === 'android_tap_element'
         && tools.androidUiTree.isConcurrencySafe?.({}) === true,
     )
+    // A tool description is model-facing text with NO compile-time checking, so a
+    // concatenation mistake leaks silently: an earlier edit produced
+    // "...the default.NaNdropped the labeled levels..." because a line ended
+    // "' + PARA + " and the next began "+ 'When...", which evaluates as
+    // PARA + (+'When') === PARA + NaN. The model would have read that.
+    for (const tool of [tools.androidUiTree, tools.androidTapElement]) {
+      const text = tool.description ?? ''
+      step(
+        `${tool.name} description has no leaked NaN/undefined/null`,
+        !/\bNaN\b|\bundefined\b|\bnull\b/.test(text),
+        text.slice(0, 80),
+      )
+      step(
+        `${tool.name} description has no doubled or dangling text`,
+        !/\s\s{2,}\S/.test(text.replace(/\n\n/g, ' ').replace(/(^|\. )\s?/g, '$1'))
+          && !text.includes('+ '),
+        'catches a stray concatenation operator',
+      )
+    }
     const tree = await tools.androidUiTree.execute({}, makeExec('android_ui_tree', {}))
     step(
       'android_ui_tree returns {device, screen, nodeCount, tree}',

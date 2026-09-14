@@ -46,10 +46,30 @@ step('a closed port resolves undefined', await server.adbServerRequest('host:dev
 step('an unknown service resolves undefined', await server.adbServerRequest('host:no-such-service') === undefined)
 step('an empty service resolves undefined', await server.adbServerRequest('') === undefined)
 step('an oversized service resolves undefined', await server.adbServerRequest('x'.repeat(200000)) === undefined)
-// A loopback round trip can complete in under a millisecond, so a 1 ms budget is
-// legitimately enough and RETURNING DATA IS CORRECT. The guarantee to assert is
-// that a budget which cannot elapse in time yields undefined rather than hanging.
-step('a budget too small to elapse resolves undefined', await server.adbServerRequest('host:devices-l', { timeoutMs: 0 }) === undefined)
+// A loopback round trip measures 0-1 ms here, so ANY budget can legitimately be
+// won by a healthy server -- asserting "a tiny timeout must fail" tests the
+// machine's speed, not the client. The real guarantee is that a server which
+// NEVER answers resolves undefined instead of hanging.
+const lingering = new Set()
+const silent = createServer(sock => {
+  // Accept and never reply: the client must time out on its own.
+  lingering.add(sock)
+  sock.on('close', () => lingering.delete(sock))
+})
+await new Promise(res => silent.listen(0, '127.0.0.1', res))
+const silentPort = silent.address().port
+try {
+  const started = Date.now()
+  const result = await server.adbServerRequest('host:devices-l', { port: silentPort, timeoutMs: 250 })
+  const elapsed = Date.now() - started
+  step('a server that never replies resolves undefined (no hang)',
+    result === undefined && elapsed < 2000, 'took ' + elapsed + ' ms')
+} finally {
+  // close() waits for open connections, and the client's socket is one. Drop it
+  // first so the server can actually shut down.
+  for (const sock of lingering) sock.destroy()
+  await new Promise(res => silent.close(res))
+}
 
 // ── 3. a hostile server cannot fake a device list ────────────────────────────
 async function withFakeServer(reply, fn) {
