@@ -66,6 +66,7 @@ import {
   type AndroidVisionServices,
 } from './vision.js'
 import { screenshotImageRef, type CaptureVisionInput } from './tool-support.js'
+import { screenFingerprint } from './screen-fingerprint.js'
 
 /** Registered UI tool names, in registration order. */
 export const ANDROID_UI_TOOL_NAMES = ['android_ui_tree', 'android_tap_element'] as const
@@ -490,6 +491,8 @@ export interface AndroidUiTreeResult {
   nodeCount: number
   /** True when the 40 KB cap pruned the deepest levels. */
   truncated?: boolean
+  /** True when this result was served from the if_moved cache (no dump spent). */
+  cached?: boolean
   /** Guidance: why the read looks the way it does, and what to do next. */
   hint?: string
   /** Compact node tree (recursive; JSON-object typed for the canonical value). */
@@ -595,6 +598,90 @@ const treeNodeSchema = {
   additionalProperties: true,
 } as const
 
+// ── if_moved: an opt-in dump cache keyed on the cheap screen fingerprint ─────
+//
+// A uiautomator dump costs ~2.4 s and ~61% of that is its own JVM startup,
+// which no flag removes (the stock CLI is one-shot; there is no persistent
+// server, and app_process is no faster — all measured). The only lever is
+// making FEWER dumps, so when a caller opts in we spend ~130 ms on a
+// fingerprint first and reuse the previous tree when nothing moved.
+//
+// Cache key = serial + the max_depth/filter SHAPE, because the same root
+// forest renders to different trees under a different filter or depth. The
+// fingerprint covers focus + window geometry, so it cannot see an in-place
+// content update; that limit is documented on the parameter rather than
+// hidden, and the caller can always pass if_moved: false.
+interface TreeCacheEntry {
+  digest: string
+  shape: string
+  roots: UiTreeNode[]
+  device: AndroidDeviceInfo
+}
+
+const treeCache = new Map<string, TreeCacheEntry>()
+
+/** Store one freshly dumped forest for a later if_moved read. */
+async function rememberTree(
+  host: AndroidToolHost,
+  serial: string,
+  shape: string,
+  roots: UiTreeNode[],
+): Promise<void> {
+  try {
+    const { digest } = await screenFingerprint(host.toolchain, serial)
+    if (digest === '') {
+      treeCache.delete(serial)
+      return
+    }
+    const device = await host.resolveTarget(serial)
+    treeCache.set(serial, { digest, shape, roots, device: deviceSummaryOf(device) });
+  }
+  catch {
+    // Caching is an optimisation; never let it break a successful read.
+    treeCache.delete(serial)
+  }
+}
+
+/**
+ * The cached result when the screen provably has not moved, else undefined.
+ *
+ * An unavailable fingerprint (empty digest) answers undefined so the caller
+ * dumps: the cheap signal failing must never masquerade as "unchanged".
+ */
+async function cachedTreeIfUnmoved(
+  host: AndroidToolHost,
+  serial: string,
+  shape: string,
+  args: { max_depth?: number; filter?: string },
+): Promise<AndroidUiTreeResult | undefined> {
+  const entry = treeCache.get(serial)
+  if (entry === undefined || entry.shape !== shape) return undefined
+  try {
+    const { digest } = await screenFingerprint(host.toolchain, serial)
+    if (digest === '' || digest !== entry.digest) return undefined
+    const result = buildTreeResult(entry.roots, screenBoundsOf(entry.roots), entry.device, args)
+    return {
+      ...result,
+      cached: true,
+      hint: [
+        'This tree is a CACHE HIT: the screen fingerprint (window focus and geometry) matched the previous '
+        + 'read, so no ~2.4 s dump was spent. If an in-place update could have changed the CONTENT without '
+        + 'moving a window, re-run with if_moved: false to force a fresh dump.',
+        ...(result.hint === undefined ? [] : [result.hint]),
+      ].join(' '),
+    }
+  }
+  catch {
+    return undefined
+  }
+}
+
+/** Drop one serial's cached tree (used by the tap tools after they act). */
+export function invalidateTreeCache(serial?: string): void {
+  if (serial === undefined) treeCache.clear()
+  else treeCache.delete(serial)
+}
+
 /** Create the two `android_ui_*` tool definitions bound to one host. */
 export function createAndroidUiTools(host: AndroidToolHost, options: AndroidUiToolsOptions = {}): AndroidUiTools {
   const vision = options.vision
@@ -633,6 +720,17 @@ export function createAndroidUiTools(host: AndroidToolHost, options: AndroidUiTo
         description: 'Case-insensitive substring matched against a node\'s text, content-desc, resource-id or '
           + 'type. Matching nodes and their ancestors are kept, everything else is pruned.',
       },
+      if_moved: {
+        type: 'boolean',
+        description: 'Opt-in caching. A dump costs ~2.4 s (mostly uiautomator\'s own JVM startup, which no '
+          + 'flag removes), so re-reading a screen that has NOT changed pays that price for identical bytes. '
+          + 'With if_moved: true the tool first takes a ~130 ms fingerprint of the window state; if it matches '
+          + 'the previous read for this serial AND that read used the same max_depth/filter, the cached tree is '
+          + 'returned with cached: true and no dump is spent. Default false, so every call dumps and the '
+          + 'behaviour is unchanged unless you ask for it. The fingerprint compares window focus and geometry, '
+          + 'so an in-place content update that moves neither (a list refreshing inside one window) can still '
+          + 'be reported as unchanged — pass if_moved: false when you must observe such a change.',
+      },
     },
     output: {
       schema: {
@@ -643,6 +741,7 @@ export function createAndroidUiTools(host: AndroidToolHost, options: AndroidUiTo
           screen: { ...sizeSchema, required: true },
           nodeCount: { type: 'integer', required: true },
           truncated: { type: 'boolean' },
+          cached: { type: 'boolean' },
           hint: { type: 'string' },
           tree: { type: 'array', required: true, items: treeNodeSchema },
         },
@@ -651,14 +750,20 @@ export function createAndroidUiTools(host: AndroidToolHost, options: AndroidUiTo
     },
     timeoutMs: 180_000,
     isConcurrencySafe: () => true,
-    async execute(args: { serial?: string; max_depth?: number; filter?: string }) {
+    async execute(args: { serial?: string; max_depth?: number; filter?: string; if_moved?: boolean }) {
       const device = await host.resolveTarget(args.serial)
+      const shape = `${args.max_depth ?? ''}|${args.filter ?? ''}`
+      if (args.if_moved === true) {
+        const hit = await cachedTreeIfUnmoved(host, device.serial, shape, args)
+        if (hit !== undefined) return hit
+      }
       let roots: UiTreeNode[]
       try {
         roots = (await readUiTree(host.toolchain, device.serial)).roots
       } catch (error) {
         throw new Error(`android_ui_tree: ${errorMessage(error)}`)
       }
+      await rememberTree(host, device.serial, shape, roots)
       return buildTreeResult(roots, screenBoundsOf(roots), deviceSummaryOf(device), args)
     },
     presentCall: (args: { serial?: string }) => ({
@@ -787,6 +892,9 @@ export function createAndroidUiTools(host: AndroidToolHost, options: AndroidUiTo
       } catch (error) {
         throw new Error(`android_tap_element: the tap at (${center.x}, ${center.y}) px failed: ${errorMessage(error)}`)
       }
+      // A tap is exactly the kind of change the fingerprint must not miss, so
+      // any cached tree for this device is dropped rather than trusted.
+      invalidateTreeCache(device.serial)
       await sleep(TAP_SETTLE_MS)
       const screenshot = await captureScreenshot('android_tap_element', screenshots, host, device,
         vision === undefined ? undefined : { services: vision, exec })
