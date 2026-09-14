@@ -24,12 +24,21 @@
 </p>
 <p align="center"><sub>An Android device streamed and controlled from inside a DSH conversation — the agent's tool call in the center, the live device panel on the right</sub></p>
 
-> **Fork note.** This is a fork of the upstream plugin (see [FORK.md](./FORK.md)).
-> In addition to the upstream tools it ships an **optional** on-device bridge that
-> cuts a UI-tree read from ~2.4 s to ~3 ms — a 20x speed-up at the tool layer —
-> and fixes a tap-coordinate bug where every tap landed up to 35 px low.
-> The bridge is entirely optional: without it installed, everything behaves
-> exactly as upstream, just slower. See **[docs/bridge.md](./docs/bridge.md)**.
+> **Fork note.** This is a fork of the upstream plugin (see [FORK.md](./FORK.md))
+> with changes measured against upstream rc.8 on real hardware.
+>
+> - A UI-tree read goes from **~2450 ms to ~11 ms** (p50, tool layer): an optional
+>   on-device bridge does the work, and re-reading an unchanged screen costs **2-4 ms**.
+> - `android_ui_tree` gains an opt-in `view: "actionable"` shape, **56-59% fewer
+>   tokens** on real screens. The default is unchanged: omitting `view` is byte-identical to `full`.
+> - Two upstream bugs are fixed: **every tap landed up to 35 px off** (a target near the
+>   screen edge could not be hit at all), and the image seam silently never delivered
+>   screenshots to the model.
+>
+> The bridge is **entirely optional** — without the APK installed every path falls back
+> to uiautomator and behaves exactly as upstream, just slower.
+> Full breakdown with numbers: **[docs/vs-upstream.zh.md](./docs/vs-upstream.zh.md)**;
+> setup: **[docs/bridge.md](./docs/bridge.md)**.
 
 ## Why DSH Android
 
