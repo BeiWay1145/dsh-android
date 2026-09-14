@@ -103,7 +103,7 @@ export interface AndroidToolHost {
    * which differs from this by the system-bar inset (measured 1500 vs 1536),
    * so a tap must convert before normalizing.
    */
-  inputSpace(serial: string): Promise<{ width: number; height: number }>
+  inputSpace(serial: string, options?: { rotation?: number }): Promise<{ width: number; height: number }>
 }
 
 /** Device summary carried by every tool result and presentationMeta. */
@@ -908,8 +908,11 @@ export function createAndroidUiTools(host: AndroidToolHost, options: AndroidUiTo
       const expectation = tapExpectation(args)
       const device = await host.resolveTarget(args.serial)
       let roots: UiTreeNode[]
+      let treeRotation: number | undefined
       try {
-        roots = (await readUiTree(host.toolchain, device.serial)).roots
+        const parsed = await readUiTree(host.toolchain, device.serial)
+        roots = parsed.roots
+        treeRotation = parsed.rotation
       } catch (error) {
         throw new Error(`android_tap_element: ${errorMessage(error)}`)
       }
@@ -930,7 +933,7 @@ export function createAndroidUiTools(host: AndroidToolHost, options: AndroidUiTo
       // input space FIRST, then normalize by that same space — normalizing by
       // the tree height and multiplying back by the frame height is what made
       // every tap land up to 35 px low.
-      const input = await host.inputSpace(device.serial)
+      const input = await host.inputSpace(device.serial, treeRotation === undefined ? {} : { rotation: treeRotation })
       const tap = treePixelToInput(center, input, round4)
       try {
         await host.tap(device.serial, tap.x, tap.y)

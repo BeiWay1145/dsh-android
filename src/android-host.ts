@@ -556,10 +556,26 @@ export class AndroidHostController {
    *
    * Falls back to `wm size` when no stream is running, exactly as `#pixels` does.
    */
-  async inputSpace(serial: string): Promise<{ width: number; height: number }> {
+  async inputSpace(serial: string, options: { rotation?: number } = {}): Promise<{ width: number; height: number }> {
+    // The live frame is already in the CURRENT display orientation, so it is the
+    // authoritative source whenever a stream is running.
     const frame = this.streamedSerial === serial ? this.latestFrame : undefined
     if (frame !== undefined) return { width: frame.width, height: frame.height }
-    return this.toolchain.screenSize(serial)
+
+    // Fallback: `wm size` reports the NATURAL/override panel size and NEVER
+    // rotates (3000x1500 portrait stays 3000x1500 in landscape). Returning it
+    // verbatim to a caller holding a LANDSCAPE tree would swap the axes — the
+    // tree's x would be measured against the portrait width — which is the same
+    // class of space mismatch that made every tap land 35 px low.
+    //
+    // The tree knows its own rotation, so the caller passes it and the axes are
+    // swapped back. Round-trips happened to survive this before (both sides used
+    // the same unrotated number), but the reported `screen` was wrong and any
+    // caller mixing the two spaces would have broken silently.
+    const natural = await this.toolchain.screenSize(serial)
+    const rotation = options.rotation
+    const swap = rotation === 1 || rotation === 3
+    return swap ? { width: natural.height, height: natural.width } : natural
   }
 
   /** Normalized frame coordinates → `input` pixels via the live frame size. */
