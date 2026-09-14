@@ -48,7 +48,7 @@ const { step, finish } = createStepReporter()
 
 const client = loadClientExports(
   readFileSync(join(root, 'lib', 'client.js'), 'utf8'),
-  '@zseven-w/dsh-android',
+  '@beiway1145/dsh-android',
   specifier => reactRuntimeRequire(specifier),
 )
 

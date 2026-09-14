@@ -1,6 +1,6 @@
 {
   "name": "@beiway1145/dsh-android",
-  "version": "0.1.0-rc.8+beiway.1",
+  "version": "0.1.0-rc.8+beiway.2",
   "description": "FORK of @zseven-w/dsh-android (upstream: https://github.com/ZSeven-W/dsh-android). Adds android_query/android_assert, a repaired image seam, and uiautomator dump-cost reductions. Not an upstream release — do NOT treat the upstream version as this package's.",
   "license": "MIT",
   "keywords": [
