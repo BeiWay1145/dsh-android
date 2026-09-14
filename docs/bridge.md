@@ -6,10 +6,12 @@
 
 | 路径 | 耗时 |
 |---|---:|
-| uiautomator dump（原路径） | 2432-2459 ms |
-| bridge 首次读取 | 56 ms |
-| bridge 空闲屏重复读取 | **2-4 ms** |
-| android_ui_tree 工具层 | 166 ms（对比回退路径 3341 ms，**20x**） |
+| uiautomator dump（原路径） | 3242-4122 ms（p50 **3571**） |
+| bridge 原始读取（热） | **2-7 ms**（p50 **4**） |
+| bridge 空闲屏重复读取（revision 缓存） | **2-4 ms** |
+| **android_ui_tree 工具层** | **p50 40 ms**（n=30，stdev 14） |
+| 对比：工具层走 uiautomator 回退 | p50 3998 ms |
+| **端到端加速** | **90.9x** |
 
 ## 是否必须安装？
 
