@@ -71,6 +71,8 @@ export interface BridgeToolchain {
   forward(serial: string, remote: string): Promise<number>
   /** Tear down a previously established forward (best effort). */
   unforward?(serial: string, localPort: number): Promise<void>
+  /** Existing forwards for a device, so an orphan can be adopted. */
+  listForwards?(serial: string): Promise<string[]>
 }
 
 /** Per-serial cached state. */
@@ -102,10 +104,21 @@ export class BridgeClient {
     this.#toolchain = toolchain
   }
 
-  /** Test/diagnostic hook: forget everything about one device. */
-  reset(serial?: string): void {
-    if (serial === undefined) this.#state.clear()
-    else this.#state.delete(serial)
+  /**
+   * Forget one device (or all) and release any forward this client created.
+   *
+   * Used by tests and by teardown. Adoption means a forward may predate us, so
+   * removing it is best-effort and never fatal.
+   */
+  async reset(serial?: string): Promise<void> {
+    const targets = serial === undefined ? [...this.#state.keys()] : [serial]
+    for (const key of targets) {
+      const state = this.#state.get(key)
+      if (state?.port !== undefined && this.#toolchain.unforward !== undefined) {
+        await this.#toolchain.unforward(key, state.port).catch(() => {})
+      }
+      this.#state.delete(key)
+    }
   }
 
   /**
@@ -226,6 +239,17 @@ export class BridgeClient {
   async #connect(serial: string): Promise<number | undefined> {
     const state = this.#stateOf(serial)
     try {
+      // ADOPT an existing forward before creating one. `adb forward` state lives
+      // in the adb SERVER, not this process, so a previous run of the plugin (or
+      // another client) may already hold a mapping. Creating a fresh one every
+      // time leaks a mapping per process — measured: 12 accumulated over one
+      // session of test runs — and nothing ever cleans them up, because only a
+      // FAILED request calls #drop.
+      const adopted = await this.#adoptExisting(serial)
+      if (adopted !== undefined) {
+        await this.#request(adopted, { id: 0, cmd: 'ping' }, BRIDGE_REQUEST_TIMEOUT_MS).catch(() => undefined)
+        return adopted
+      }
       const port = await this.#toolchain.forward(serial, `localabstract:${BRIDGE_SOCKET_NAME}`)
       if (!Number.isInteger(port) || port <= 0) {
         state.retryAfter = Date.now() + BRIDGE_NEGATIVE_TTL_MS
@@ -244,6 +268,30 @@ export class BridgeClient {
       state.retryAfter = Date.now() + BRIDGE_NEGATIVE_TTL_MS
       return undefined
     }
+  }
+
+  /**
+   * Find an existing host→device forward for our socket.
+   *
+   * `adb forward --list` output is "<serial> tcp:<port> localabstract:<name>".
+   * Returns the port of the first match, or undefined when there is none (or the
+   * toolchain cannot list them).
+   */
+  async #adoptExisting(serial: string): Promise<number | undefined> {
+    const list = this.#toolchain.listForwards
+    if (list === undefined) return undefined
+    try {
+      for (const line of await list(serial)) {
+        if (!line.includes(`localabstract:${BRIDGE_SOCKET_NAME}`)) continue
+        const match = / tcp:(\d+) /.exec(` ${line} `)
+        if (match === null) continue
+        const port = Number(match[1])
+        if (Number.isInteger(port) && port > 0) return port
+      }
+    } catch {
+      // Listing is best-effort; a failure just means we create our own.
+    }
+    return undefined
   }
 
   /** Send one request and resolve its reply. Rejects on timeout/close. */

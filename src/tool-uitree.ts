@@ -661,7 +661,16 @@ interface TreeCacheEntry {
 
 const treeCache = new Map<string, TreeCacheEntry>()
 
-/** Store one freshly dumped forest for a later if_moved read. */
+/**
+ * Store one freshly dumped forest for a later if_moved read.
+ *
+ * Only called when the caller actually opted into `if_moved`. The fingerprint is
+ * a FULL `dumpsys window` round trip (measured ~150 ms on a real device), and
+ * its only purpose is to let a LATER `if_moved` read prove the screen has not
+ * moved — a caller that never passes `if_moved` gets nothing back for it and
+ * would simply pay it on every single read. Recording is therefore keyed to the
+ * same flag that consumes it.
+ */
 async function rememberTree(
   host: AndroidToolHost,
   serial: string,
@@ -804,7 +813,9 @@ export function createAndroidUiTools(host: AndroidToolHost, options: AndroidUiTo
       } catch (error) {
         throw new Error(`android_ui_tree: ${errorMessage(error)}`)
       }
-      await rememberTree(host, device.serial, shape, roots)
+      // Only worth recording when the caller may later ask if_moved; otherwise
+      // this would add a ~150 ms fingerprint to every plain read.
+      if (args.if_moved === true) await rememberTree(host, device.serial, shape, roots)
       return buildTreeResult(roots, screenBoundsOf(roots), deviceSummaryOf(device), args)
     },
     presentCall: (args: { serial?: string }) => ({
