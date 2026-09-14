@@ -98,33 +98,40 @@ public class BridgeService extends AccessibilityService {
      * the full consequence.
      */
     int[] appFrame() {
-        // The APP frame is what uiautomator reports as the hierarchy root bounds
-        // (measured: 2560x1500 in landscape), and it is NOT the display size
-        // (2560x1536). The plugin divides tap pixels by this value, so getting it
-        // wrong shifts every tap.
+        // Report the APP FRAME — the same thing `uiautomator dump` puts on its
+        // hierarchy root — so the two backends are indistinguishable to callers.
         //
-        // Two earlier attempts failed:
-        //   1. WindowMetrics.getBounds()      -> 2560x1536 (full display)
-        //   2. minus systemBars insets (96)   -> 2560x1440 (60 px too short; the
-        //      landscape status bar is drawn OVER the app, it does not shrink it)
-        //   3. Configuration.windowConfiguration is a HIDDEN field, unavailable
-        //      against the public SDK.
-        //
-        // This reads the ACTIVE WINDOW's own frame through the public
-        // AccessibilityService#getWindows() API — the frame the window manager
-        // actually gave the app, so it cannot drift from what the app sees.
+        // MEASURED on a MIUI 14 tablet (landscape): display is 2560x1536 and
+        // uiautomator reports 2560x1500, i.e. the 36 px navigation bar is
+        // excluded while the 60 px status bar is NOT (MIUI lays the app window
+        // out in-screen under the status bar, so that bar overlays rather than
+        // insets). Three earlier attempts got this wrong:
+        //   1. getCurrentWindowMetrics().getBounds()        -> 1536 (full display)
+        //   2. minus systemBars() insets (60 + 36)          -> 1440 (60 too small,
+        //      it subtracted a bar that does not inset)
+        //   3. the TYPE_APPLICATION window from getWindows()-> 1536 (MIUI reports
+        //      the window frame as the full display for the same reason)
+        // Subtracting ONLY the navigation-bar insets matches, and is derived from
+        // the live inset rather than a hard-coded number, so it follows the device
+        // into portrait and into gesture-navigation where the bar is a different
+        // size.
         try {
-            java.util.List<android.view.accessibility.AccessibilityWindowInfo> windows = getWindows();
-            if (windows != null) {
-                for (android.view.accessibility.AccessibilityWindowInfo w : windows) {
-                    if (w == null) continue;
-                    if (w.getType() != android.view.accessibility.AccessibilityWindowInfo.TYPE_APPLICATION) continue;
-                    android.graphics.Rect b = new android.graphics.Rect();
-                    w.getBoundsInScreen(b);
-                    if (b.width() > 0 && b.height() > 0) {
-                        return new int[] { b.width(), b.height() };
-                    }
+            android.view.WindowManager wm =
+                (android.view.WindowManager) getSystemService(WINDOW_SERVICE);
+            if (wm != null && android.os.Build.VERSION.SDK_INT >= 30) {
+                android.view.WindowMetrics metrics = wm.getCurrentWindowMetrics();
+                android.graphics.Rect bounds = metrics.getBounds();
+                int w = bounds.width();
+                int h = bounds.height();
+                try {
+                    android.view.WindowInsets insets = metrics.getWindowInsets();
+                    android.graphics.Insets nav = insets.getInsetsIgnoringVisibility(
+                        android.view.WindowInsets.Type.navigationBars());
+                    w -= nav.left + nav.right;
+                    h -= nav.top + nav.bottom;
+                } catch (Throwable ignored) {
                 }
+                if (w > 0 && h > 0) return new int[] { w, h };
             }
         } catch (Throwable ignored) {
         }

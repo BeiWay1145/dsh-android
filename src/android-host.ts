@@ -17,6 +17,7 @@
  */
 
 import { AdbError, AdbToolchain, type AndroidDevice } from './adb.js'
+import { BridgeClient } from './bridge-client.js'
 import { AdbFrameLoop, type DeviceFrame } from './frame-source.js'
 
 const DEFAULT_IDLE_TIMEOUT_MS = 5 * 60 * 1000
@@ -154,8 +155,22 @@ export class AndroidHostController {
   #disposed = false
   readonly #frameSubscribers = new Set<(frame: DeviceFrame) => void>()
 
+  /**
+   * Client for the optional on-device bridge. One per host so its forward and
+   * health cache survive across tool calls (re-forwarding per dump would give up
+   * most of the win).
+   */
+  readonly bridge: BridgeClient
+
   constructor(toolchain?: AdbToolchain, options: AndroidHostOptions = {}) {
     this.toolchain = toolchain ?? new AdbToolchain()
+    this.bridge = new BridgeClient(this.toolchain)
+    // Attach the bridge to the toolchain itself: the tools receive this host and
+    // read `host.toolchain`, so this is the one place that makes the fast path
+    // visible to them without threading a new parameter through every caller.
+    // Adding a property here is safe — AdbToolchain is a class instance and the
+    // bridge is a pure addition (dumpUiTreeXml treats it as optional).
+    ;(this.toolchain as AdbToolchain & { bridge?: BridgeClient }).bridge = this.bridge
     this.#options = {
       restartDelayMs: options.restartDelayMs ?? DEFAULT_RESTART_DELAY_MS,
       idleTimeoutMs: options.idleTimeoutMs ?? DEFAULT_IDLE_TIMEOUT_MS,
@@ -166,6 +181,7 @@ export class AndroidHostController {
   get available(): boolean {
     return this.toolchain.available
   }
+
 
   get running(): boolean {
     return this.#loop?.running === true

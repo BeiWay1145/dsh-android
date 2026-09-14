@@ -24,6 +24,12 @@ import { delimiter, dirname, join } from 'node:path'
 
 const EXEC_TIMEOUT_MS = 30_000
 const MAX_EXEC_BUFFER = 32 * 1024 * 1024
+/**
+ * `adb forward` is a cheap server-side command, but the FIRST one in a session
+ * may have to start the adb daemon. Short enough to not stall a dump, long
+ * enough to absorb a daemon start.
+ */
+const FORWARD_TIMEOUT_MS = 10_000
 const BOOT_POLL_INTERVAL_MS = 1_000
 export const DEFAULT_BOOT_TIMEOUT_MS = 180_000
 
@@ -310,6 +316,39 @@ export class AdbToolchain {
   async shell(serial: string, command: readonly string[], options: { timeoutMs?: number; maxBuffer?: number; signal?: AbortSignal } = {}): Promise<string> {
     const { stdout } = await this.exec(['shell', ...command], { serial, ...options })
     return stdout.replace(/\r\n/g, '\n')
+  }
+
+  /**
+   * Establish a host→device socket forward and return the LOCAL TCP port.
+   *
+   * `adb forward tcp:0 <remote>` lets the adb server pick a free port and prints
+   * it, which avoids hard-coding a port that something else may already hold.
+   * The remote is a device-side address such as `localabstract:dsh_bridge`.
+   *
+   * Used by the optional on-device bridge: it turns "one adb process per dump"
+   * into one persistent socket this host can talk to directly.
+   */
+  async forward(serial: string, remote: string): Promise<number> {
+    const { stdout } = await this.exec(['forward', 'tcp:0', remote], { serial, timeoutMs: FORWARD_TIMEOUT_MS })
+    const port = Number(stdout.trim())
+    if (!Number.isInteger(port) || port <= 0) {
+      throw new AdbError(
+        `adb forward tcp:0 ${remote} did not report a port for ${serial}: ${stdout.trim() || '(no output)'}`,
+        ['forward', 'tcp:0', remote],
+      )
+    }
+    return port
+  }
+
+  /** Tear down one forward, ignoring failures (it may already be gone). */
+  async unforward(serial: string, localPort: number): Promise<void> {
+    await this.exec(['forward', '--remove', `tcp:${localPort}`], { serial, timeoutMs: FORWARD_TIMEOUT_MS }).catch(() => {})
+  }
+
+  /** List the active forwards for one device (diagnostics and tests). */
+  async listForwards(serial: string): Promise<string[]> {
+    const { stdout } = await this.exec(['forward', '--list'], { timeoutMs: FORWARD_TIMEOUT_MS })
+    return stdout.split('\n').map(line => line.trim()).filter(line => line.startsWith(serial))
   }
 
   /** Spawn a long-lived `adb -s <serial> exec-out <command…>` child. */
