@@ -481,6 +481,40 @@ export async function runTapExpectation(
   return { text, mode, matched: outcome.matched, waitedMs: outcome.waitedMs }
 }
 
+/**
+ * The tap tools' post-settle work, run CONCURRENTLY.
+ *
+ * Without an expectation this is just the effect screenshot. WITH one, the old
+ * shape awaited the screenshot and only then started the expectation poll —
+ * which captures ANOTHER screenshot as its first read. Two `screencap` round
+ * trips (~0.4 s each on a real device) were therefore paid back to back for one
+ * user-visible action, even though neither depends on the other: the effect
+ * screenshot always runs, and the poll can decide `appear` on its very first
+ * read.
+ *
+ * Running them together removes the second capture's cost from the critical
+ * path whenever it can decide immediately, and never costs MORE than the old
+ * shape (the poll is unchanged either way).
+ */
+export async function captureWithExpectation(
+  tool: string,
+  store: ScreenshotStore,
+  host: AndroidToolHost,
+  device: AndroidDevice,
+  expectation: { text: string; mode: 'appear' | 'disappear' } | undefined,
+  vision: CaptureVisionInput | undefined,
+  signal?: AbortSignal,
+): Promise<{ screenshot: ScreenshotCapture; expected?: OcrExpectationResult }> {
+  if (expectation === undefined) {
+    return { screenshot: await captureScreenshot(tool, store, host, device, vision) }
+  }
+  const [screenshot, expected] = await Promise.all([
+    captureScreenshot(tool, store, host, device, vision),
+    runTapExpectation(tool, store, host, device, expectation.text, expectation.mode, signal),
+  ])
+  return { screenshot, expected }
+}
+
 // ── result shapes ────────────────────────────────────────────────────────────
 
 export interface AndroidUiTreeResult {
@@ -896,11 +930,15 @@ export function createAndroidUiTools(host: AndroidToolHost, options: AndroidUiTo
       // any cached tree for this device is dropped rather than trusted.
       invalidateTreeCache(device.serial)
       await sleep(TAP_SETTLE_MS)
-      const screenshot = await captureScreenshot('android_tap_element', screenshots, host, device,
-        vision === undefined ? undefined : { services: vision, exec })
-      const expected = expectation === undefined
-        ? undefined
-        : await runTapExpectation('android_tap_element', screenshots, host, device, expectation.text, expectation.mode, exec.signal)
+      const { screenshot, expected } = await captureWithExpectation(
+        'android_tap_element',
+        screenshots,
+        host,
+        device,
+        expectation,
+        vision === undefined ? undefined : { services: vision, exec },
+        exec.signal,
+      )
       return {
         action: 'tap-element',
         element: {

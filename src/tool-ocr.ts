@@ -42,6 +42,7 @@ import {
   TAP_SETTLE_MS,
   boundsSchema,
   captureScreenshot,
+  captureWithExpectation,
   deviceSchema,
   deviceSummaryOf,
   errorMessage,
@@ -54,7 +55,6 @@ import {
   round2,
   round4,
   runOcr,
-  runTapExpectation,
   screenshotMeta,
   sizeSchema,
   sleep,
@@ -527,11 +527,15 @@ export function createAndroidOcrTools(host: AndroidToolHost, options: AndroidUiT
         throw new Error(`android_tap_text: the tap at (${round2(center.x)}, ${round2(center.y)}) px failed: ${errorMessage(error)}`)
       }
       await sleep(TAP_SETTLE_MS)
-      const screenshot = await captureScreenshot('android_tap_text', screenshots, host, device,
-        vision === undefined ? undefined : { services: vision, exec })
-      const expected = expectation === undefined
-        ? undefined
-        : await runTapExpectation('android_tap_text', screenshots, host, device, expectation.text, expectation.mode, exec.signal)
+      const { screenshot, expected } = await captureWithExpectation(
+        'android_tap_text',
+        screenshots,
+        host,
+        device,
+        expectation,
+        vision === undefined ? undefined : { services: vision, exec },
+        exec.signal,
+      )
       return {
         action: 'tap-text',
         text: item.text,
