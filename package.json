@@ -1,22 +1,27 @@
 {
-  "name": "@zseven-w/dsh-android",
-  "version": "0.1.0-rc.8",
-  "description": "DeepSeek Harness plugin for Android — build, run, and interact with a live emulator or USB device stream inside a conversation, driven entirely through adb. Tested with DSH 0.1.5-rc.1.",
+  "name": "@beiway1145/dsh-android",
+  "version": "0.1.0-rc.8+beiway.1",
+  "description": "FORK of @zseven-w/dsh-android (upstream: https://github.com/ZSeven-W/dsh-android). Adds android_query/android_assert, a repaired image seam, and uiautomator dump-cost reductions. Not an upstream release — do NOT treat the upstream version as this package's.",
   "license": "MIT",
   "keywords": [
     "dsh",
     "android",
     "adb",
     "emulator",
-    "plugin"
+    "plugin",
+    "fork"
   ],
   "repository": {
     "type": "git",
-    "url": "https://github.com/ZSeven-W/dsh-android.git"
+    "url": "https://github.com/BeiWay1145/dsh-android.git"
   },
   "type": "module",
-  "publishConfig": {
-    "access": "public"
+  "private": true,
+  "forkOf": {
+    "name": "@zseven-w/dsh-android",
+    "repository": "https://github.com/ZSeven-W/dsh-android.git",
+    "upstreamVersion": "0.1.0-rc.8",
+    "note": "Upstream is the source of truth for releases. This package carries extra local commits; a plain version comparison against upstream will misreport it."
   },
   "engines": {
     "node": ">=24.11.0"
