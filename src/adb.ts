@@ -18,6 +18,7 @@
  */
 
 import { execFile, spawn, type ChildProcess } from 'node:child_process'
+import { adbServerDevices } from './adb-server.js'
 import { statSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { delimiter, dirname, join } from 'node:path'
@@ -357,36 +358,29 @@ export class AdbToolchain {
     return spawn(adb, ['-s', serial, 'exec-out', ...command], { stdio: ['ignore', 'pipe', 'pipe'] })
   }
 
-  /** Parse `adb devices -l` (skips the header and daemon-start noise). */
+  /**
+   * Devices, preferring a DIRECT adb-server query and falling back to the CLI.
+   *
+   * The server path skips starting adb.exe entirely, which is where nearly all
+   * of the cost is: measured `adb version` (spawn + handshake, no device work)
+   * ~51 ms against ~59 ms for a full `adb devices -l` — so enumeration itself is
+   * only ~6 ms and the process is the rest. The direct query measures 0-1 ms and
+   * returns the same text.
+   *
+   * The fallback keeps this honest: any server problem (not running, port moved,
+   * protocol desync, timeout) simply yields undefined and the CLI runs unchanged.
+   */
   async listDevices(): Promise<AndroidDevice[]> {
-    const { stdout } = await this.exec(['devices', '-l'])
-    const devices: AndroidDevice[] = []
-    for (const line of stdout.split('\n')) {
-      const trimmed = line.trim()
-      if (trimmed === '' || trimmed.startsWith('List of devices') || trimmed.startsWith('*')) continue
-      const match = /^(\S+)\s+(\S+)(.*)$/.exec(trimmed)
-      if (match === null) continue
-      const [, serial, rawState, rest] = match
-      const state: AdbDeviceState = (
-        ['device', 'offline', 'unauthorized', 'recovery', 'sideload'] as const
-      ).find(known => known === rawState) ?? 'unknown'
-      const fields = new Map<string, string>()
-      for (const pair of (rest ?? '').trim().split(/\s+/)) {
-        const colon = pair.indexOf(':')
-        if (colon > 0) fields.set(pair.slice(0, colon), pair.slice(colon + 1))
-      }
-      const product = fields.get('product')
-      devices.push({
-        serial: serial!,
-        state,
-        emulator: serial!.startsWith('emulator-')
-          || (product !== undefined && /goldfish|ranchu|sdk_gphone|emulator/i.test(product)),
-        ...(fields.has('model') ? { model: fields.get('model')!.replace(/_/g, ' ') } : {}),
-        ...(product === undefined ? {} : { product }),
-        ...(fields.has('transport_id') ? { transportId: fields.get('transport_id')! } : {}),
-      })
+    const fast = await adbServerDevices()
+    if (fast !== undefined) {
+      const parsed = parseDeviceList(fast)
+      // An unreachable server and a genuinely empty list both look like "no
+      // devices" here; only trust the fast path when it actually saw one, so a
+      // silent protocol mismatch can never masquerade as "device unplugged".
+      if (parsed.length > 0) return parsed
     }
-    return devices
+    const { stdout } = await this.exec(['devices', '-l'])
+    return parseDeviceList(stdout)
   }
 
   /** Devices in the `device` (fully online) state. */
@@ -546,4 +540,42 @@ export async function bootAvd(
   }
   await toolchain.waitForBoot(serial, Math.max(1_000, deadline - Date.now()))
   return { serial }
+}
+
+/**
+ * Parse `adb devices -l` output into devices.
+ *
+ * Shared by BOTH the CLI path and the direct adb-server path: the server's
+ * `host:devices-l` payload is the same text minus its "List of devices
+ * attached" header, which this already skips. One parser means the two paths
+ * cannot drift apart.
+ */
+export function parseDeviceList(stdout: string): AndroidDevice[] {
+  const devices: AndroidDevice[] = []
+  for (const line of stdout.split('\n')) {
+    const trimmed = line.trim()
+    if (trimmed === '' || trimmed.startsWith('List of devices') || trimmed.startsWith('*')) continue
+    const match = /^(\S+)\s+(\S+)(.*)$/.exec(trimmed)
+    if (match === null) continue
+    const [, serial, rawState, rest] = match
+    const state: AdbDeviceState = (
+      ['device', 'offline', 'unauthorized', 'recovery', 'sideload'] as const
+    ).find(known => known === rawState) ?? 'unknown'
+    const fields = new Map<string, string>()
+    for (const pair of (rest ?? '').trim().split(/\s+/)) {
+      const colon = pair.indexOf(':')
+      if (colon > 0) fields.set(pair.slice(0, colon), pair.slice(colon + 1))
+    }
+    const product = fields.get('product')
+    devices.push({
+      serial: serial!,
+      state,
+      emulator: serial!.startsWith('emulator-')
+        || (product !== undefined && /goldfish|ranchu|sdk_gphone|emulator/i.test(product)),
+      ...(fields.has('model') ? { model: fields.get('model')!.replace(/_/g, ' ') } : {}),
+      ...(product === undefined ? {} : { product }),
+      ...(fields.has('transport_id') ? { transportId: fields.get('transport_id')! } : {}),
+    })
+  }
+  return devices
 }

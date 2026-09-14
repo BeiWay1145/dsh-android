@@ -436,8 +436,31 @@ export class AndroidHostController {
     return { png, ...(size === undefined ? {} : size) }
   }
 
+  /**
+   * The device info captured when a stream started.
+   *
+   * Kept so a call for the STREAMED device can be answered without querying adb
+   * at all — see resolveTarget.
+   */
+  #streamedDevice: AndroidDevice | undefined
+
   /** Resolve one online device: explicit serial, streamed, or the only one. */
   async resolveTarget(serial?: string): Promise<AndroidDevice> {
+    // SHORTCUT: a running frame loop for exactly this serial is itself proof the
+    // device is online — the loop would have died otherwise — so the adb query
+    // can be skipped entirely. Measured: that query is ~29 ms of the ~40 ms
+    // android_ui_tree costs with the bridge, so this removes the bulk of what is
+    // left.
+    //
+    // Deliberately narrow, because a wrong answer here is worse than a slow one:
+    //   - only when the caller NAMED this exact serial (an unnamed call still
+    //     has to discover what else is plugged in), and
+    //   - only while the loop is genuinely running, so a device that dropped
+    //     mid-session falls back to the real query on the next call.
+    const activeSerial = this.streamedSerial
+    if (serial !== undefined && serial !== '' && serial === activeSerial && this.#streamedDevice !== undefined) {
+      return this.#streamedDevice
+    }
     const online = await this.toolchain.onlineDevices()
     if (serial !== undefined && serial !== '') {
       const match = online.find(device => device.serial === serial)
@@ -534,6 +557,8 @@ export class AndroidHostController {
     }
     this.#startedAt = Date.now()
     this.#exitAt = undefined
+    // Remember what we just proved is online so resolveTarget can skip its query.
+    this.#streamedDevice = online.find(device => device.serial === serial)
     return this.#infoOf(loop)
   }
 
