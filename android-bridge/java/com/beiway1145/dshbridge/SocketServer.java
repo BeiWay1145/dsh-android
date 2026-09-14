@@ -149,7 +149,26 @@ final class SocketServer {
                     if (root == null) return error(id, "no active window (screen may be off or locked)");
                     int[] frame = service.appFrame();
                     String xml = TreeDumper.dump(root, service.rotation(), frame[0], frame[1]);
-                    return "{\"id\":" + id + ",\"ok\":true,\"xml\":" + jsonString(xml) + "}";
+                    return "{\"id\":" + id + ",\"ok\":true,\"revision\":" + service.revision()
+                        + ",\"xml\":" + jsonString(xml) + "}";
+                }
+                case "revision":
+                    return "{\"id\":" + id + ",\"ok\":true,\"revision\":" + service.revision() + "}";
+                case "dump_if_changed": {
+                    // The caller passes the revision of the tree it already holds.
+                    // An unchanged counter means the tree it has is still valid,
+                    // so the reply carries no XML at all — that is the whole saving.
+                    long known = readLong(line, "known", -1L);
+                    long now = service.revision();
+                    if (known >= 0 && known == now) {
+                        return "{\"id\":" + id + ",\"ok\":true,\"revision\":" + now + ",\"unchanged\":true}";
+                    }
+                    android.view.accessibility.AccessibilityNodeInfo root = service.currentRoot();
+                    if (root == null) return error(id, "no active window (screen may be off or locked)");
+                    int[] frame = service.appFrame();
+                    String xml = TreeDumper.dump(root, service.rotation(), frame[0], frame[1]);
+                    return "{\"id\":" + id + ",\"ok\":true,\"revision\":" + now
+                        + ",\"unchanged\":false,\"xml\":" + jsonString(xml) + "}";
                 }
                 default:
                     return error(id, "unknown cmd: " + cmd);
@@ -172,6 +191,16 @@ final class SocketServer {
             return Integer.parseInt(v.trim());
         } catch (NumberFormatException e) {
             return -1;
+        }
+    }
+
+    private static long readLong(String json, String key, long fallback) {
+        String v = readRaw(json, key);
+        if (v == null) return fallback;
+        try {
+            return Long.parseLong(v.trim());
+        } catch (NumberFormatException e) {
+            return fallback;
         }
     }
 

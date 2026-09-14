@@ -52,6 +52,10 @@ interface BridgeReply {
   error?: string
   pong?: boolean
   version?: string
+  /** Content revision the device reported with this reply. */
+  revision?: number
+  /** True when the device skipped the tree because nothing changed. */
+  unchanged?: boolean
 }
 
 /**
@@ -77,6 +81,10 @@ interface BridgeState {
   healthy: boolean
   /** When a failed probe may be retried. */
   retryAfter: number
+  /** Content revision the cached tree was dumped at. */
+  revision?: number
+  /** The cached tree itself (proposal 2: reuse it while the revision holds). */
+  tree?: string
 }
 
 /**
@@ -121,34 +129,41 @@ export class BridgeClient {
       freshPort = true
     }
 
+    // PROPOSAL 2: ask the device whether anything changed since the revision we
+    // already hold. An unchanged counter is answered WITHOUT a tree walk or any
+    // XML on the wire, so a repeat read of an idle screen costs one tiny round
+    // trip. The device is the right place for this test — it is already
+    // subscribed to the accessibility events that prove a change happened, so
+    // the answer is cheaper AND more accurate than the host-side fingerprint.
+    const request: Record<string, unknown> = state.revision === undefined
+      ? { id: 1, cmd: 'dump' }
+      : { id: 1, cmd: 'dump_if_changed', known: state.revision }
+
     let reply: BridgeReply
     try {
-      reply = await this.#request(state.port, { id: 1, cmd: 'dump' }, timeoutMs, options.signal)
-    } catch (error) {
-      // MEASURED: the FIRST connection through a fresh `adb forward` times out
-      // (~4 s) while the very next one answers in ~6 ms — the adb server
-      // establishes the device-side socket lazily. Treating that warm-up as a
-      // dead bridge would disable the fast path for a whole TTL on every new
-      // process, so retry ONCE on a freshly created forward before giving up.
+      reply = await this.#request(state.port, request, timeoutMs, options.signal)
+    } catch {
+      // MEASURED: the FIRST connection through a fresh `adb forward` can stall
+      // (the adb server establishes the device-side socket lazily) while the
+      // next answers in ~9 ms. `#connect` warms the socket to absorb that, but a
+      // retry here keeps a one-off stall from disabling the fast path for a
+      // whole TTL.
       if (freshPort && options.signal?.aborted !== true) {
         try {
-          reply = await this.#request(state.port, { id: 2, cmd: 'dump' }, timeoutMs, options.signal)
+          reply = await this.#request(state.port, request, timeoutMs, options.signal)
         } catch {
           await this.#drop(serial, state)
           return undefined
         }
-        state.healthy = true
-        if (reply.ok && typeof reply.xml === 'string' && reply.xml !== '') return reply.xml
+      } else {
+        // The forward may be stale (adb restarted, service toggled). Drop it so
+        // the next call re-establishes, and let the caller fall back this time.
+        await this.#drop(serial, state)
         return undefined
       }
-      // The forward may be stale (adb restarted, service toggled). Drop it so
-      // the next call re-establishes, and let the caller fall back this time.
-      await this.#drop(serial, state)
-      return undefined
     }
 
-
-    if (!reply.ok || typeof reply.xml !== 'string' || reply.xml === '') {
+    if (reply.ok !== true) {
       // A reachable service that cannot dump (screen off, no active window) is a
       // transient device state, not a broken bridge: keep the port, but report
       // unavailable so the caller can try uiautomator, which may know better.
@@ -156,6 +171,14 @@ export class BridgeClient {
     }
 
     state.healthy = true
+
+    // Unchanged: serve the tree we already have. The device deliberately sent no
+    // XML, so this is the cheap path.
+    if (reply.unchanged === true) return state.tree
+
+    if (typeof reply.xml !== 'string' || reply.xml === '') return undefined
+    state.tree = reply.xml
+    if (typeof reply.revision === 'number') state.revision = reply.revision
     return reply.xml
   }
 

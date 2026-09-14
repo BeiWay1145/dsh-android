@@ -27,6 +27,29 @@ public class BridgeService extends AccessibilityService {
     /** The most recent window the system reported, refreshed by events. */
     private volatile AccessibilityNodeInfo lastRoot;
 
+    /**
+     * Bumped whenever the window content or focus changes.
+     *
+     * This is proposal 2's core: the service is ALREADY subscribed to
+     * AccessibilityEvent, so it can tell a caller "nothing changed since
+     * revision N" for the cost of a counter read — no tree walk, no
+     * serialization, and no host-side fingerprint round trip. A repeat read of
+     * an idle screen therefore costs ~1 ms instead of the ~130 ms the
+     * host-side screen fingerprint needs, or 2.4 s for a fresh uiautomator dump.
+     *
+     * Deliberately coarse: ANY relevant event invalidates. A false "changed"
+     * only costs one extra dump, while a false "unchanged" would serve a stale
+     * tree to an agent about to act on it — so the counter errs toward
+     * invalidating, and `currentRoot()` re-reads the live window regardless.
+     */
+    private final java.util.concurrent.atomic.AtomicLong revision =
+        new java.util.concurrent.atomic.AtomicLong(1);
+
+    /** The current content revision. */
+    long revision() {
+        return revision.get();
+    }
+
     @Override
     protected void onServiceConnected() {
         super.onServiceConnected();
@@ -54,6 +77,9 @@ public class BridgeService extends AccessibilityService {
         } catch (Throwable ignored) {
             // A window can vanish between the event and this read.
         }
+        // Invalidate on every event type we subscribe to. See revision() for why
+        // this errs toward a false "changed".
+        revision.incrementAndGet();
     }
 
     @Override
