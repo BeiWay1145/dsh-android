@@ -582,6 +582,29 @@ if (lib !== undefined) {
         && tools.androidTapElement.name === 'android_tap_element'
         && tools.androidUiTree.isConcurrencySafe?.({}) === true,
     )
+    // COMPATIBILITY CONTRACT: the actionable view is opt-in. Omitting view must be
+    // identical to asking for 'full', return the NESTED tree (not the flat rows),
+    // and the parameter must stay optional. Asserted rather than assumed, because
+    // flipping the default would silently change every existing caller while
+    // looking like a one-word edit in a diff.
+    {
+      const props = tools.androidUiTree.parameters?.properties ?? {}
+      step('view is declared and optional',
+        'view' in props && props.view?.required !== true)
+      step('view offers exactly full and actionable',
+        JSON.stringify(props.view?.enum) === '["full","actionable"]')
+      step('the view description names full as the default',
+        /default/i.test(props.view?.description ?? ''))
+
+      const omitted = await tools.androidUiTree.execute({}, makeExec('android_ui_tree', {}))
+      const explicit = await tools.androidUiTree.execute({ view: 'full' }, makeExec('android_ui_tree', {}))
+      step('omitting view behaves exactly like view: full',
+        JSON.stringify(omitted) === JSON.stringify(explicit))
+      const head = omitted.tree[0]
+      step('the default result is the nested tree, not flat rows',
+        head !== undefined && head.children !== undefined && head.depth === undefined)
+    }
+
     // A tool description is model-facing text with NO compile-time checking, so a
     // concatenation mistake leaks silently: an earlier edit produced
     // "...the default.NaNdropped the labeled levels..." because a line ended
