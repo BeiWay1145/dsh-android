@@ -148,6 +148,8 @@ export interface AndroidTapRowResult {
   tap: { x: number; y: number }
   /** Count-change verification, when expect_count was given. */
   countCheck?: CountCheckResult
+  /** The label expect_label required the row to contain, when it was given. */
+  expectedLabel?: string
   path: string
   bytes: number
   width?: number
@@ -358,6 +360,14 @@ export function createAndroidRowTools(host: AndroidToolHost, options: AndroidUiT
           delta: { type: 'integer', required: true, description: 'Expected change: +1 or -1 (a single toggle).' },
         },
       },
+      expect_label: {
+        type: 'string',
+        description: 'Text that MUST appear in the row at this index, or the tap is REFUSED. A row index is '
+          + 'POSITIONAL: it refers to a different row once the list scrolls, so a remembered index can tap '
+          + 'a neighbour and still report success. Pass the label of the row you mean (any distinctive '
+          + 'substring of what android_ui_rows showed) and a stale index becomes an error instead. Checked '
+          + 'BEFORE the tap, so nothing is touched on a mismatch.',
+      },
     },
     output: {
       schema: {
@@ -401,6 +411,7 @@ export function createAndroidRowTools(host: AndroidToolHost, options: AndroidUiT
       x?: number
       y?: number
       expect_count?: { key: string; delta: number }
+      expect_label?: string
     }, exec) {
       if (!Number.isInteger(args.row) || args.row < 0) {
         throw new Error('android_tap_row: row must be a 0-based row index from android_ui_rows (an integer >= 0)')
@@ -422,6 +433,25 @@ export function createAndroidRowTools(host: AndroidToolHost, options: AndroidUiT
       // The probe-guard runs BEFORE the tap: an unverifiable expectation is a
       // refusal, not a "tap and see".
       if (expectation !== undefined) requireCountKey(plan.row, expectation.key)
+      // A ROW INDEX IS POSITIONAL, so it means something different after any
+      // scroll. Reported from a real session: a caller read the rows, scrolled,
+      // then tapped 'row 3' of the list it had seen, and the tap landed on a
+      // different row entirely -- it reported success. The tool cannot know
+      // which row was meant, but the caller can say, and the label is already
+      // in hand. Checked BEFORE the tap so a stale index refuses instead of
+      // silently tapping a neighbour.
+      const wantedLabel = args.expect_label === undefined ? undefined : args.expect_label.trim()
+      if (wantedLabel !== undefined && wantedLabel !== '') {
+        const actual = plan.row.label ?? ''
+        if (!actual.toLowerCase().includes(wantedLabel.toLowerCase())) {
+          throw new Error(
+            `android_tap_row: row ${plan.row.index} is ${JSON.stringify(actual.slice(0, 120))}, which does `
+            + `not contain ${JSON.stringify(wantedLabel)}. A row index is POSITIONAL, so it refers to a `
+            + 'different row after the list scrolls — re-run android_ui_rows and pass the index you read '
+            + 'there, or drop expect_label if you really mean whatever sits at this position now.',
+          )
+        }
+      }
       if (sample.screen.width <= 0 || sample.screen.height <= 0) {
         throw new Error(
           'android_tap_row: the dump reported a zero-size display, so a tap cannot be placed — re-run '
@@ -464,10 +494,16 @@ export function createAndroidRowTools(host: AndroidToolHost, options: AndroidUiT
         tap,
         ...(countCheck === undefined ? {} : { countCheck }),
         ...screenshot,
+        ...(wantedLabel === undefined || wantedLabel === ''
+          ? {}
+          : { expectedLabel: wantedLabel }),
         ...(expectation === undefined
           ? {
-              note: 'No expect_count was given, so nothing was verified — re-run android_ui_rows and compare '
-                + 'the row counters if confirmation matters.',
+              note: (wantedLabel === undefined || wantedLabel === ''
+                ? 'Neither expect_count nor expect_label was given, so the row IDENTITY was not checked. '
+                  + 'A row index is positional: if the list has scrolled since you read it, pass '
+                  + 'expect_label to make a stale index refuse instead of tapping the wrong row.'
+                : 'expect_label confirmed the row identity before the tap.'),
             }
           : {}),
       } satisfies AndroidTapRowResult

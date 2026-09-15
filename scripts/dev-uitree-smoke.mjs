@@ -471,6 +471,24 @@ if (lib !== undefined) {
       Array.isArray(detected.nearMissRuns),
       `nearMissRuns=${JSON.stringify(detected.nearMissRuns)}`,
     )
+    // A row index is POSITIONAL, so it names a different row after a scroll.
+    // Reported from a real session: a caller tapped 'row 3' of a list it had
+    // read earlier, the tap landed on a different row, and the tool reported
+    // success. expect_label turns that into a refusal.
+    step('a row carries the label a caller can assert against',
+      typeof detected.rows[0]?.label === 'string' && detected.rows[0].label !== '',
+      JSON.stringify(detected.rows[0]?.label))
+    {
+      const guard = (row, wanted) => {
+        const actual = row.label ?? ''
+        return actual.toLowerCase().includes(wanted.trim().toLowerCase())
+      }
+      step('the guard ACCEPTS a label the row contains',
+        guard(detected.rows[0], String(detected.rows[0].label).slice(0, 4)))
+      step('the guard REFUSES a label the row does not contain',
+        !guard(detected.rows[0], 'definitely not in this row'),
+        'this is what turns a stale index into an error instead of a wrong tap')
+    }
     const first = detected.rows[0]
     step(
       'row label aggregates the subtree text',
@@ -794,7 +812,7 @@ if (lib !== undefined) {
         && tapped.inRow.x === 0.9 && tapped.inRow.y === 0.5
         && tapped.center.x === Math.round(rows.rows[1].frame.x + 0.9 * rows.rows[1].frame.w)
         && Math.abs(fake.taps.at(-1).x - tapped.center.x / 1080) < 1e-4
-        && /No expect_count was given/.test(tapped.note ?? ''),
+        && /Neither expect_count nor expect_label was given/.test(tapped.note ?? ''),
       `${JSON.stringify(tapped.center)} → ${JSON.stringify(fake.taps.at(-1))}`,
     )
     step('android_tap_row result is lossless JSON', findJsonViolations(tapped).length === 0, findJsonViolations(tapped).join(', '))
