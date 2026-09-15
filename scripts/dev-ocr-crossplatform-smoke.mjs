@@ -81,6 +81,27 @@ if (resolved.available) {
     String(resolved.reason))
 }
 
+// The language probe: a missing language must be DETECTED, because Tesseract
+// continues without it and reports success. Measured on a real host: clearing
+// TESSDATA_PREFIX dropped chi_sim and returned 37 items -- none Chinese.
+{
+  const binary = tess.resolveTesseract()
+  if (binary.available) {
+    const verified = await tess.verifiedTesseractLanguages(binary)
+    step('the language probe runs and returns a verdict', verified !== undefined,
+      verified === undefined ? 'probe returned undefined' : `requested=${verified.requested.join('+')} missing=${verified.missing.join(',') || 'none'}`)
+    step('the probe reports the REQUESTED set, not just what exists',
+      (verified?.requested.length ?? 0) > 0)
+    step('a language present on this host is not reported missing',
+      verified === undefined || !verified.missing.includes('eng'),
+      'eng should be found by any Tesseract install')
+  } else {
+    step('no Tesseract here, so the probe is skipped', true, binary.reason)
+  }
+  step('the probe answers undefined for an unavailable binary, never a guess',
+    await tess.verifiedTesseractLanguages({ available: false }) === undefined)
+}
+
 console.log('')
 console.log(`${pass}/${pass + fail} steps passed${fail === 0 ? '' : ` (${fail} FAILED)`}`)
 process.exit(fail === 0 ? 0 : 1)

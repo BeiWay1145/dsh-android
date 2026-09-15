@@ -116,6 +116,56 @@ export function tesseractLanguages(): string {
 }
 
 /**
+ * Which of the REQUESTED languages Tesseract can actually load.
+ *
+ * This exists because Tesseract does not fail on a missing language: it
+ * prints a warning to stderr and carries on WITHOUT it. Measured on a real
+ * Windows host, clearing TESSDATA_PREFIX dropped chi_sim while the run still
+ * exited 0 and returned 37 items -- none of them Chinese. The tool reported
+ * success, so the caller had no way to tell 'this screen has no Chinese'
+ * from 'Chinese was never loaded'.
+ *
+ * The language data is commonly split across two directories (the install
+ * dir and a user dir selected by TESSDATA_PREFIX), so a host can easily have
+ * eng in one and chi_sim in the other. Verified on this machine:
+ *   C:/Program Files/Tesseract-OCR/tessdata  -> eng, osd
+ *   ~/.tesseract/tessdata                    -> chi_sim, eng, jpn, osd
+ *
+ * Returns undefined when the probe itself cannot run, so an unknown answer is
+ * never mistaken for a verified one.
+ */
+export async function verifiedTesseractLanguages(
+  binary: TesseractBinary,
+  signal?: AbortSignal,
+): Promise<{ requested: string[]; missing: string[] } | undefined> {
+  if (!binary.available || binary.command === undefined) return undefined
+  const requested = tesseractLanguages().split('+').map(s => s.trim()).filter(s => s !== '')
+  try {
+    const out = await new Promise<string>((resolve, reject) => {
+      execFile(binary.command!, ['--list-langs'], { timeout: 20_000, maxBuffer: 1024 * 1024, signal, windowsHide: true },
+        (error, stdout, stderr) => {
+          // --list-langs writes the names to stdout; a non-zero exit can still
+          // carry a usable list, so only a totally empty answer is fatal.
+          const text = `${stdout ?? ''}\n${stderr ?? ''}`
+          if (error !== null && text.trim() === '') reject(error)
+          else resolve(text)
+        })
+    })
+    const available = new Set(
+      out.split(/\r?\n/)
+        .map(line => line.trim())
+        .filter(line => line !== '' && !line.includes(':') && !line.includes(' ')),
+    )
+    // A listing that parsed to nothing means the probe failed, not that NO
+    // language exists -- do not report every language as missing.
+    if (available.size === 0) return undefined
+    return { requested, missing: requested.filter(lang => !available.has(lang)) }
+  } catch {
+    return undefined
+  }
+}
+
+/**
  * Run Tesseract over one PNG and return its TSV rows.
  *
  * \`--psm 11\` (sparse text) is the mode that suits screens: UI text is not a

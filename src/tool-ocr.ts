@@ -37,6 +37,7 @@ import {
   type OcrRect,
   resolveOcrBinary,
 } from './ocr-backend.js'
+import { verifiedTesseractLanguages } from './ocr-tesseract.js'
 import {
   ocrPollIntervalMs,
   ScreenshotStore,
@@ -218,6 +219,37 @@ export function resolveOcrTextTarget(
 }
 
 /** Cap the OCR item list (~40 KB): drop the lowest-confidence tail first. */
+/**
+ * A warning naming any requested OCR language the engine cannot load, or undefined.
+ *
+ * Tesseract does NOT fail on a missing language -- it warns on stderr and
+ * continues without it, so a host missing chi_sim returns zero Chinese and
+ * reports success. Measured: clearing TESSDATA_PREFIX turned 34 items (with
+ * Chinese) into 37 items (none), with no error anywhere.
+ *
+ * Probed once per process: the answer cannot change while DSH runs.
+ */
+let languageWarning: string | undefined | null = null
+async function ocrLanguageWarning(signal?: AbortSignal): Promise<string | undefined> {
+  if (languageWarning !== null) return languageWarning
+  const binary = resolveOcrBinary()
+  if (binary.backend !== 'tesseract') {
+    languageWarning = undefined
+    return undefined
+  }
+  const verified = await verifiedTesseractLanguages(
+    { available: binary.available, ...(binary.command === undefined ? {} : { command: binary.command }) },
+    signal,
+  )
+  languageWarning = verified !== undefined && verified.missing.length > 0
+    ? `The OCR engine does NOT have these requested languages loaded: ${verified.missing.join(', ')}. `
+      + 'Text in them is missing from these results, and an empty result may mean only that. '
+      + 'Install the language data (Tesseract ships them separately) or point TESSDATA_PREFIX at a '
+      + 'directory that holds them, then retry.'
+    : undefined
+  return languageWarning
+}
+
 function capOcrItems(items: AndroidFindTextItem[]): { items: AndroidFindTextItem[]; truncated: boolean } {
   const bytes = (list: AndroidFindTextItem[]): number => Buffer.byteLength(JSON.stringify(list), 'utf8')
   if (bytes(items) <= OCR_CAP_BYTES) return { items, truncated: false }
@@ -302,18 +334,20 @@ export function createAndroidOcrTools(host: AndroidToolHost, options: AndroidUiT
         rect: roundRect(item.rect),
       }))
       const capped = capOcrItems(converted)
+      const languageNote = await ocrLanguageWarning(exec.signal)
+      // A missing language outranks the size cap: an empty result is far more
+      // likely to be explained by it than by truncation.
+      const hint = languageNote ?? (capped.truncated
+        ? 'The OCR item list exceeded the 40 KB output cap and the lowest-confidence items were '
+          + 'dropped. Narrow with query or raise min_confidence.'
+        : undefined)
       return {
         device: shot.device,
         screen: { width: pixelSize.width, height: pixelSize.height },
         count: capped.items.length,
         items: capped.items,
-        ...(capped.truncated
-          ? {
-              truncated: true,
-              hint: 'The OCR item list exceeded the 40 KB output cap and the lowest-confidence items were '
-                + 'dropped. Narrow with query or raise min_confidence.',
-            }
-          : {}),
+        ...(capped.truncated ? { truncated: true } : {}),
+        ...(hint === undefined ? {} : { hint }),
       } satisfies AndroidFindTextResult
     },
     presentCall: (args: { query?: string }) => ({
