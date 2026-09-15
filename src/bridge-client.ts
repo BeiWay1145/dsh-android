@@ -255,15 +255,31 @@ export class BridgeClient {
         state.retryAfter = Date.now() + BRIDGE_NEGATIVE_TTL_MS
         return undefined
       }
-      // WARM-UP: `adb forward` establishes the device-side socket LAZILY — the
-      // first connection through a fresh forward can stall for seconds (measured
-      // ~2.4-4 s once, ~40 ms when the service is already warm) while the next
-      // answers in ~9 ms. Probing here moves that one-off cost to connect time,
-      // where it is paid once per session, instead of landing on the first
-      // android_ui_tree the user runs. A failed probe is not fatal on its own:
-      // the query that follows reports the real outcome.
-      await this.#request(port, { id: 0, cmd: 'ping' }, BRIDGE_REQUEST_TIMEOUT_MS).catch(() => undefined)
-      return port
+      // WARM-UP, and it must SUCCEED. `adb forward` establishes the device-side
+      // socket lazily: the first connection through a fresh forward can stall
+      // while the next answers in single-digit milliseconds. Probing here moves
+      // that one-off cost to connect time, where it is paid once per session.
+      //
+      // Swallowing a failed probe is NOT good enough — measured on a real
+      // device, the flow was: probe stalls -> catch swallows it -> the caller's
+      // real request stalls on the SAME unestablished handshake -> burns the
+      // full 5 s timeout -> the forward is dropped as if broken -> the next
+      // call builds a new one and succeeds instantly. The first read of every
+      // process therefore cost 5 s AND discarded a working forward.
+      //
+      // Retrying the warm-up instead turns that into one retry here, after
+      // which the forward is genuinely usable.
+      for (let attempt = 0; attempt < 2; attempt += 1) {
+        const warmed = await this.#request(port, { id: 0, cmd: 'ping' }, BRIDGE_REQUEST_TIMEOUT_MS)
+          .then(reply => reply.ok === true)
+          .catch(() => false)
+        if (warmed) return port
+      }
+      // Never warm after two tries: give up on this forward and let the caller
+      // fall back, rather than making it wait again.
+      await this.#toolchain.unforward?.(serial, port).catch(() => {})
+      state.retryAfter = Date.now() + BRIDGE_NEGATIVE_TTL_MS
+      return undefined
     } catch {
       state.retryAfter = Date.now() + BRIDGE_NEGATIVE_TTL_MS
       return undefined
