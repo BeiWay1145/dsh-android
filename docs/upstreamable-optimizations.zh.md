@@ -67,21 +67,21 @@ const tap = { x: center.x / screen.width, y: center.y / screen.height }
 
 ---
 
-### A3. `if_moved` 的指纹记账时机
+### A3. ~~`if_moved` 的指纹记账时机~~ —— **已撤回，这条不属于上游**
 
-`android_ui_tree` **每次读取都记一次屏幕指纹**（完整 `dumpsys window`，实测 ~150 ms），
-目的是让**后续**的 `if_moved` 读取能证明屏幕没变。
-但从不传 `if_moved` 的调用方**每次都在为一个自己用不上的缓存付费**。
+> **核对结论（2026-09-14）**：上游 **完全没有** `if_moved`，也没有
+> `src/screen-fingerprint.ts`（`ls` 与 `grep -c if_moved` 均为 0）。
+> 这两样都是本 fork 自己加的，所以「指纹记早了」是**我自己代码的缺陷**，
+> 不是上游的问题。**此条不能作为上游 issue 提出。**
+>
+> 原始描述保留在下方仅供追溯，但**不要据此提 issue**。
 
-**修复**：按需记录（只在 `if_moved: true` 时记）。
-
-**实测收益**：`android_ui_tree` p50 **194 ms → 40 ms**（bridge 关闭时）。
-
-**改动面**：`tool-uitree.ts` 约 10 行
-**自包含**：是（前提是上游先接受 `if_moved`，即 ~ed2f6a9 那一串）
+~~`android_ui_tree` 每次读取都记一次屏幕指纹~~（实测 ~150 ms），
+~~目的是让后续的 `if_moved` 读取能证明屏幕没变~~。
+~~但从不传 `if_moved` 的调用方每次都在为一个自己用不上的缓存付费~~。
+~~**修复**：按需记录。~~
 
 ---
-
 ## 级别 B：性能优化，自包含，无行为变更
 
 ### B1. 直连 adb server 枚举设备（省 59 ms → 1 ms）
@@ -164,14 +164,43 @@ adb 协议二十年未变，但理论上存在风险。
 
 ## 建议的回馈顺序
 
-| 顺序 | 项 | 理由 |
+| 顺序 | 项 | 理由 | 形式 |
+|---|---|---|---|
+| 1 | **A1 tap 漂移 35px** | 上游真实缺陷（已逐行核对），影响每次点击 | PR |
+| 2 | **A2 图像链路静默失效** | 静默失效最危险，修复小且独立 | PR |
+| 3 | **B1 adb server 枚举** | 59ms → 1ms，无行为变更 | PR（需讨论新增文件）|
+| 4 | **B2 stream 快捷路径** | 省 29ms，锦上添花 | 可并入 B1 的 PR |
+| — | ~~A3 指纹记账~~ | **已撤回：上游无此代码** | — |
+| — | C1/C2/C3 | 需先与维护者讨论方向 | issue 先行 |
+
+---
+
+## 核对记录（2026-09-14）
+
+本清单的每条主张都已对照上游源码（`origin/main` = 209c0f6）逐行核实：
+
+| 主张 | 核对方式 | 结论 |
 |---|---|---|
-| 1 | **A1 tap 漂移** | 上游真实缺陷，影响每次点击，修复自包含 |
-| 2 | **A2 图像链路** | 静默失效最危险，修复小 |
-| 3 | **A3 指纹记账** | 小改动，立竿见影（省 150 ms/次）|
-| 4 | **B1 adb server** | 收益大且无行为变更，但需新增文件 |
-| 5 | **B2 stream 快捷路径** | 锦上添花 |
-| — | C1/C2/C3 | 需先与维护者讨论方向 |
+| A1 两处分母不一致 | 读 `tool-uitree.ts:784` 与 `android-host.ts #pixels` | ✅ **成立** |
+| A2 急切采样 + 单一入口 | 读 `vision.ts resolveVisionServices` 与 `index.ts:253` | ✅ **成立** |
+| A3 指纹记早了 | `ls src/screen-fingerprint.ts`、`grep -c if_moved` | ❌ **上游无此代码，已撤回** |
+| B1 每次都 spawn adb | 读 `resolveTarget` → `onlineDevices()` | ✅ 成立 |
+| B2 未用 stream 状态 | `streamedSerial` 仅用于取帧 | ✅ 成立 |
+| 静默截断最深一层 | 读 `capTreeToBytes` → `pruneDeepestLevel` | ✅ 成立 |
+
+### A1 的上游原文（可直接引用）
+
+```ts
+// src/tool-uitree.ts:784
+const tap = { x: round4(center.x / screen.width), y: round4(center.y / screen.height) }
+
+// src/android-host.ts #pixels
+if (frame !== undefined) {
+  return { x: Math.round(x * frame.width), y: Math.round(y * frame.height) }
+}
+```
+
+`screen` 来自 UI 树根节点（app 帧，实测 1500），`frame.height` 来自截屏（完整显示区，实测 1536）。
 
 ---
 
