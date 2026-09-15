@@ -62,6 +62,7 @@ import {
   hasLabeledNode,
   readUiTree,
   screenBoundsOf,
+  treePixelToInput,
   type UiTreeNode,
 } from './uitree.js'
 import { IMAGE_REF_SCHEMA, renderJsonWithImage } from './vision.js'
@@ -199,19 +200,23 @@ export function createAndroidRowTools(host: AndroidToolHost, options: AndroidUiT
   const readRows = async (tool: string, serial: string): Promise<{
     roots: UiTreeNode[]
     screen: { width: number; height: number }
+    rotation?: number
     rows: ListRow[]
     repeatedGroups: number
     omittedOffscreen: number
   }> => {
     let roots: UiTreeNode[]
+    let rotation: number | undefined
     try {
-      roots = (await readUiTree(host.toolchain, serial)).roots
+      const parsed = await readUiTree(host.toolchain, serial)
+      roots = parsed.roots
+      rotation = parsed.rotation
     } catch (error) {
       throw new Error(`${tool}: ${errorMessage(error)}`)
     }
     const screen = screenBoundsOf(roots)
     const detected = detectListRows(roots, { bounds: screen })
-    return { roots, screen, ...detected }
+    return { roots, screen, ...(rotation === undefined ? {} : { rotation }), ...detected }
   }
 
   const androidUiRows = defineTool({
@@ -406,10 +411,9 @@ export function createAndroidRowTools(host: AndroidToolHost, options: AndroidUiT
           + 'android_ui_rows once the screen is on and settled',
         )
       }
-      const tap = {
-        x: round4(plan.tap.x / sample.screen.width),
-        y: round4(plan.tap.y / sample.screen.height),
-      }
+      // Same app-frame vs input-space divergence as android_tap_element.
+      const input = await host.inputSpace(device.serial, sample.rotation === undefined ? {} : { rotation: sample.rotation })
+      const tap = treePixelToInput(plan.tap, input, round4)
       try {
         await host.tap(device.serial, tap.x, tap.y)
       } catch (error) {

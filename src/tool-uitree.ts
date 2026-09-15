@@ -54,6 +54,7 @@ import {
   hasLabeledNode,
   readUiTree,
   resolveTapTarget,
+  treePixelToInput,
   screenBoundsOf,
   type UiBounds,
   type UiTreeNode,
@@ -94,6 +95,13 @@ export interface AndroidToolHost {
   resolveTarget(serial?: string): Promise<AndroidDevice>
   /** Tap at normalized 0..1 coordinates of the current frame. */
   tap(serial: string, x: number, y: number): Promise<void>
+  /**
+   * The display space `input` addresses. Tree pixels live in the app frame,
+   * which differs from this by the system-bar inset (measured 1500 vs 1536),
+   * so a tap must normalize against THIS space rather than the tree height.
+   */
+  inputSpace(serial: string, options?: { rotation?: number }): Promise<{ width: number; height: number }>
+
   /** Capture a fresh PNG, independent of the stream loop. */
   screenshot(serial: string): Promise<{ png: Buffer; width?: number; height?: number }>
 }
@@ -762,8 +770,11 @@ export function createAndroidUiTools(host: AndroidToolHost, options: AndroidUiTo
       const expectation = tapExpectation(args)
       const device = await host.resolveTarget(args.serial)
       let roots: UiTreeNode[]
+      let treeRotation: number | undefined
       try {
-        roots = (await readUiTree(host.toolchain, device.serial)).roots
+        const parsed = await readUiTree(host.toolchain, device.serial)
+        roots = parsed.roots
+        treeRotation = parsed.rotation
       } catch (error) {
         throw new Error(`android_tap_element: ${errorMessage(error)}`)
       }
@@ -779,9 +790,12 @@ export function createAndroidUiTools(host: AndroidToolHost, options: AndroidUiTo
         )
       }
       const center = boundsCenter(node.bounds)
-      // Pixel center → normalized 0..1 of the SAME display space the stream
-      // and `input tap` share (docs/contract.zh.md: no rotation inverse).
-      const tap = { x: round4(center.x / screen.width), y: round4(center.y / screen.height) }
+      // The dump reports the APP frame while `input` addresses the FULL
+      // display; they share an origin but differ in extent by the system-bar
+      // inset. Normalizing by the tree height and multiplying back by the frame
+      // height made every tap land up to 35 px low.
+      const input = await host.inputSpace(device.serial, treeRotation === undefined ? {} : { rotation: treeRotation })
+      const tap = treePixelToInput(center, input, round4)
       try {
         await host.tap(device.serial, tap.x, tap.y)
       } catch (error) {

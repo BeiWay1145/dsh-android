@@ -529,6 +529,30 @@ export class AndroidHostController {
     }
   }
 
+  /**
+   * The display space `input` addresses (full display, orientation-aware).
+   *
+   * This is the SAME source `#pixels` uses, exposed so a caller holding a
+   * coordinate in another space (the UI tree's app-frame pixels) can normalize
+   * against the space the tap will actually be interpreted in. The two used to
+   * be mixed implicitly: the tap tools normalized by the TREE height while
+   * `#pixels` multiplied by the live frame height, which silently rescaled
+   * every tap.
+   *
+   * `wm size` in the fallback reports the NATURAL panel size and never rotates,
+   * so a caller holding a landscape tree must pass its rotation or the axes
+   * come back swapped.
+   */
+  async inputSpace(serial: string, options: { rotation?: number } = {}): Promise<{ width: number; height: number }> {
+    // The live frame is already in the current display orientation.
+    const frame = this.streamedSerial === serial ? this.latestFrame : undefined
+    if (frame !== undefined) return { width: frame.width, height: frame.height }
+    const natural = await this.toolchain.screenSize(serial)
+    const rotation = options.rotation
+    const swap = rotation === 1 || rotation === 3
+    return swap ? { width: natural.height, height: natural.width } : natural
+  }
+
   /** Normalized frame coordinates → `input` pixels via the live frame size. */
   async #pixels(serial: string, x: number, y: number): Promise<{ x: number; y: number }> {
     const frame = this.streamedSerial === serial ? this.latestFrame : undefined
