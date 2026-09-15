@@ -360,6 +360,7 @@ export function createAndroidRowTools(host: AndroidToolHost, options: AndroidUiT
           delta: { type: 'integer', required: true, description: 'Expected change: +1 or -1 (a single toggle).' },
         },
       },
+      expectedLabel: { type: 'string' },
       expect_label: {
         type: 'string',
         description: 'Text that MUST appear in the row at this index, or the tap is REFUSED. A row index is '
@@ -379,6 +380,11 @@ export function createAndroidRowTools(host: AndroidToolHost, options: AndroidUiT
           inRow: { ...pointSchema, required: true },
           center: { ...pointSchema, required: true },
           tap: { ...pointSchema, required: true },
+          // Closed schema (additionalProperties: false): a returned field that
+          // is not listed here makes the host reject the WHOLE result, which
+          // takes the tool down entirely. This one was returned before it was
+          // declared once already.
+          expectedLabel: { type: 'string' },
           countCheck: {
             type: 'object',
             additionalProperties: false,

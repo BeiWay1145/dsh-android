@@ -997,6 +997,12 @@ export function createAndroidUiTools(host: AndroidToolHost, options: AndroidUiTo
         properties: {
           device: { ...deviceSchema, required: true },
           screen: { ...sizeSchema, required: true },
+          // MUST stay declared: the output schema sets additionalProperties:
+          // false, so returning a field that is not listed here makes the host
+          // reject the WHOLE result. Adding `display` to the result without
+          // adding it here broke every android_ui_tree call on every device --
+          // reported as 'value.display is not a declared property'.
+          display: { ...sizeSchema },
           nodeCount: { type: 'integer', required: true },
           truncated: { type: 'boolean' },
           cached: { type: 'boolean' },
