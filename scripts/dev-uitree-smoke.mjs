@@ -214,6 +214,7 @@ if (lib !== undefined) {
     extractHierarchyXml,
     hasLabeledNode,
     isOffscreenBounds,
+  seekBarTapPoint,
     parseBounds,
     parseUiTree,
     parseXmlElements,
@@ -357,6 +358,27 @@ if (lib !== undefined) {
   }
   step('isOffscreenBounds is geometric', isOffscreenBounds({ x: 0, y: 2400, w: 100, h: 100 }, fixtureScreen)
     && !isOffscreenBounds({ x: 0, y: 0, w: 10, h: 10 }, fixtureScreen))
+  // SeekBar geometry. Measured from a real MIUI dialog: the bar is 1410x45 at
+  // (63,1151) with its value in a sibling TextView. A drag does NOT set these
+  // (it dismisses the dialog); a TAP on the track does.
+  {
+    const bar = { x: 63, y: 1151, w: 1410, h: 45 }
+    const left = seekBarTapPoint(bar, 0)
+    const right = seekBarTapPoint(bar, 1)
+    const mid = seekBarTapPoint(bar, 0.5)
+    step('a seek tap stays INSIDE the widget at both ends',
+      left.x > bar.x && right.x < bar.x + bar.w,
+      `0 -> ${left.x}, 1 -> ${right.x}, bar ends ${bar.x}..${bar.x + bar.w}`)
+    step('a seek tap is vertically centred on the track',
+      left.y === bar.y + Math.round(bar.h / 2) && right.y === left.y,
+      String(mid.y))
+    step('a seek tap is monotonic in the fraction', left.x < mid.x && mid.x < right.x,
+      `${left.x} < ${mid.x} < ${right.x}`)
+    expectThrow(step, 'a fraction above 1 is refused',
+      () => seekBarTapPoint(bar, 1.5), /fraction must be within 0\.\.1/)
+    expectThrow(step, 'a negative fraction is refused',
+      () => seekBarTapPoint(bar, -0.1), /fraction must be within 0\.\.1/)
+  }
   // A zero-AREA box INSIDE the screen is not tappable either. MIUI reports
   // recycled RecyclerView rows as [x,1000][x+200,1000]; tapping its 'center'
   // hits whatever is actually there. Reported from a real session where this

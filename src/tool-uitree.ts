@@ -60,6 +60,8 @@ import {
   readUiTree,
   resolveTapTarget,
   screenBoundsOf,
+  seekBarTapPoint,
+  nearbyLabelText,
   treePixelToInput,
   type UiBounds,
   type UiTreeNode,
@@ -149,6 +151,7 @@ export interface AndroidUiToolsOptions {
 /** The two `android_ui_*` tool definitions bound to one host controller. */
 export interface AndroidUiTools {
   androidUiTree: ToolDefinition
+  androidSetSeekbar: ToolDefinition
   androidTapElement: ToolDefinition
 }
 
@@ -933,6 +936,153 @@ export function createAndroidUiTools(host: AndroidToolHost, options: AndroidUiTo
   const cacheDir = options.cacheDir ?? join(tmpdir(), 'dsh-android')
   const screenshots = new ScreenshotStore(cacheDir)
 
+  /**
+   * Set a SeekBar by TAPPING its track at a fraction of its width.
+   *
+   * A dedicated tool rather than a flag on android_tap_element, because the two
+   * have different failure modes. A tap either finds its target or refuses; a
+   * 'tap with a value' has no defined behaviour when the matched node is not a
+   * slider -- it would either degrade to a plain tap (the caller believes a value
+   * was set and none was) or error (in which case it was never a tap). Refusing
+   * is the honest option, which means it wants its own name.
+   *
+   * Verified against a drag: `input swipe` does NOT set these. Reproduced on the
+   * device against MIUI's SWAP dialog -- the value stayed at 50 and the dialog
+   * was DISMISSED, because the parent read the drag as a dismiss gesture. A tap
+   * on the track sets it, and that is what a finger does too.
+   */
+  const androidSetSeekbar = defineTool({
+    name: 'android_set_seekbar',
+    description: 'Set a seek bar / slider by TAPPING its track at a FRACTION of its width. This is how '
+      + 'Android sliders actually respond: a DRAG (android_interact action gesture) does NOT set them and '
+      + 'can DISMISS the enclosing dialog, because the parent reads the drag as a dismiss gesture -- '
+      + 'measured on a real MIUI dialog. Use a fraction rather than an absolute value because a '
+      + 'uiautomator dump reports a slider bounds and its current text, never its MAXIMUM, so an absolute '
+      + 'value cannot be converted into a position. The bar is located fresh on every call, so a scrolled '
+      + 'or rotated layout cannot leave a stale coordinate behind. After tapping, this RE-READS the '
+      + 'hierarchy and reports the nearby label text, so you can see whether the value actually moved '
+      + 'instead of assuming it did.',
+    parameters: {
+      serial: {
+        type: 'string',
+        description: 'Target device serial from android_devices. Defaults to the streamed device, else '
+          + 'the only connected one.',
+      },
+      identifier: {
+        type: 'string',
+        description: 'resource-id of the seek bar, e.g. seekbar_swap_swappiness (exact match wins, then '
+          + 'case-insensitive substring).',
+      },
+      label: {
+        type: 'string',
+        description: 'Visible text or content-desc to match, instead of or as well as an identifier.',
+      },
+      fraction: {
+        type: 'number',
+        required: true,
+        description: 'Where to set it, 0..1 of the track: 0 is the far left, 1 the far right. Read the '
+          + 'current value next to the slider to work out which direction you need.',
+      },
+    },
+    output: {
+      schema: {
+        type: 'object',
+        additionalProperties: false,
+        properties: {
+          device: { ...deviceSchema, required: true },
+          screen: { ...sizeSchema, required: true },
+          action: { type: 'string', required: true },
+          element: {
+            type: 'object',
+            required: true,
+            additionalProperties: false,
+            properties: {
+              type: { type: 'string', required: true },
+              text: { type: 'string' },
+              resourceId: { type: 'string' },
+              bounds: { ...boundsSchema, required: true },
+            },
+          },
+          fraction: { type: 'number', required: true },
+          center: { ...pointSchema, required: true },
+          tap: { ...pointSchema, required: true },
+          nearbyText: { type: 'array' },
+          changed: { type: 'boolean' },
+          hint: { type: 'string' },
+          path: { type: 'string', required: true },
+          bytes: { type: 'integer', required: true },
+          width: { type: 'integer' },
+          height: { type: 'integer' },
+          image: IMAGE_REF_SCHEMA,
+        },
+      },
+      render: renderJsonWithImage,
+      presentationMeta: (_args: unknown, value: JsonValue): JsonValue => screenshotMeta(value),
+    },
+    timeoutMs: 180_000,
+    isConcurrencySafe: () => false,
+    async execute(args: { serial?: string; identifier?: string; label?: string; fraction: number }, exec) {
+      const device = await host.resolveTarget(args.serial)
+      const parsed = await readUiTree(host.toolchain, device.serial)
+      const screen = screenBoundsOf(parsed.roots)
+      const target = resolveTapTarget(parsed.roots, {
+        ...(args.identifier === undefined ? {} : { identifier: args.identifier }),
+        ...(args.label === undefined ? {} : { label: args.label }),
+      }, { tool: 'android_set_seekbar' })
+      const node = target.node
+      // The widget check is the reason this tool exists, so it is a hard gate.
+      if (!/SeekBar|ProgressBar|Slider/i.test(String(node.type))) {
+        throw new Error(
+          `android_set_seekbar: the match is a ${node.type}, not a seek bar. This tool only sets `
+          + 'sliders, because a plain tap on anything else either does nothing or does something '
+          + 'unrelated. Use android_tap_element for a button, and android_ui_rows with android_tap_row '
+          + 'for a list item.',
+        )
+      }
+      const center = seekBarTapPoint(node.bounds, args.fraction)
+      const input = await host.inputSpace(device.serial,
+        parsed.rotation === undefined ? {} : { rotation: parsed.rotation })
+      const tap = treePixelToInput(center, input, round4)
+      await host.tap(device.serial, tap.x, tap.y)
+      await sleep(TAP_SETTLE_MS)
+      // Read back: the point is to SEE whether the value moved, not to report a
+      // tap and let the caller assume it worked.
+      const before = nearbyLabelText(parsed.roots, node.bounds)
+      const after = await readUiTree(host.toolchain, device.serial).catch(() => undefined)
+      const nearbyText = after === undefined ? [] : nearbyLabelText(after.roots, node.bounds)
+      const changed = nearbyText.length > 0 && JSON.stringify(before) !== JSON.stringify(nearbyText)
+      const screenshot = await captureScreenshot('android_set_seekbar', screenshots, host, device,
+        vision === undefined ? undefined : { services: vision, exec })
+      return {
+        screen: { width: round2(screen.width), height: round2(screen.height) },
+        action: 'set-seekbar',
+        element: {
+          type: node.type,
+          ...(node.text === undefined ? {} : { text: node.text }),
+          ...(node.resourceId === undefined ? {} : { resourceId: node.resourceId }),
+          bounds: node.bounds,
+        },
+        fraction: args.fraction,
+        center,
+        tap,
+        nearbyText,
+        changed,
+        ...(changed
+          ? {}
+          : { hint: 'The label(s) beside this slider did not change after the tap. Either the slider '
+              + 'does not show its value as text (so this check is inconclusive), or the tap missed the '
+              + 'track. Re-run android_ui_tree and read the value before assuming it was set.' }),
+        ...screenshot,
+      }
+    },
+    presentCall: (args: { fraction: number }) => ({
+      card: 'generic',
+      title: `Set seek bar to ${args.fraction}`,
+      kind: 'execute',
+      rawInput: { fraction: args.fraction },
+    }),
+  })
+
   const androidUiTree = defineTool({
     name: 'android_ui_tree',
     description: 'Dump the frontmost window\'s view hierarchy on a connected Android device or emulator '
@@ -1211,5 +1361,5 @@ export function createAndroidUiTools(host: AndroidToolHost, options: AndroidUiTo
     }),
   })
 
-  return { androidUiTree, androidTapElement }
+  return { androidUiTree, androidTapElement, androidSetSeekbar }
 }

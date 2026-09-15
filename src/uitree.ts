@@ -912,6 +912,71 @@ export function containsBounds(outer: UiBounds, inner: UiBounds): boolean {
 }
 
 /** True when two boxes are the same box (mutual containment). */
+/**
+ * A seek bar's tap point for a fraction of its track.
+ *
+ * Measured against a real MIUI dialog (Scene's SWAP page): three SeekBars of
+ * 1410x45 px, each with its value in an adjacent TextView. Two things that
+ * shaped this:
+ *
+ * 1. `input swipe` DOES NOT WORK on them. Reproduced on the device -- a drag
+ *    across the track left the value unchanged AND dismissed the dialog, because
+ *    the gesture was read by the parent as a dismiss. A TAP on the track sets
+ *    the value, which is what a person's finger does too.
+ * 2. The MAXIMUM is not in the hierarchy. A uiautomator dump reports bounds and
+ *    the current text, never the range, so an absolute value cannot be converted
+ *    to a position. A FRACTION can: it needs only the bounds.
+ *
+ * The point is inset from both ends by half the widget height. Thumb travel
+ * usually spans the full width, but a tap exactly on the boundary can land
+ * outside the widget's touch region, so the extremes are pulled in just enough
+ * to stay inside without meaningfully shifting the value.
+ */
+/**
+ * Label text lying on the same visual ROW as a widget, read back after a tap.
+ *
+ * A SeekBar does not expose its value: the number lives in a sibling TextView.
+ * On MIUI's SWAP dialog the slider is 1410x45 at y=1151 and its value ("50") is
+ * a separate node at y=1070. "Same row" therefore means vertically near the
+ * widget's centre line, within one widget height -- which is how these dialogs
+ * lay a value out beside or just above its control.
+ *
+ * Returns at most a handful of strings, deduped, so the result stays small and a
+ * before/after comparison is meaningful.
+ */
+export function nearbyLabelText(roots: readonly UiTreeNode[], bounds: UiBounds): string[] {
+  const flat = flattenNodes(roots)
+  // The band must reach the row ABOVE the widget, not just its own line:
+  // measured on MIUI's SWAP dialog the slider is at y=1151 h=45 (centre 1173.5)
+  // while its value "50" sits at y=1070 h=44 (centre 1092) -- 81 px away, so a
+  // one-height band misses the very label the caller needs to confirm the set.
+  const centre = bounds.y + bounds.h / 2
+  const slack = Math.max(bounds.h * 2, 64)
+  const texts: string[] = []
+  for (const node of flat) {
+    const value = node.text ?? node.contentDesc
+    if (value === undefined || value.trim() === '') continue
+    const nodeCentre = node.bounds.y + node.bounds.h / 2
+    if (Math.abs(nodeCentre - centre) > slack) continue
+    texts.push(value.trim())
+    if (texts.length >= 6) break
+  }
+  return [...new Set(texts)]
+}
+export function seekBarTapPoint(
+  bounds: UiBounds,
+  fraction: number,
+  round: (value: number) => number = Math.round,
+): { x: number; y: number } {
+  if (!Number.isFinite(fraction) || fraction < 0 || fraction > 1) {
+    throw new RangeError(`dsh-android: seekbar fraction must be within 0..1, got ${String(fraction)}`)
+  }
+  const inset = Math.min(bounds.h / 2, bounds.w / 4)
+  return {
+    x: round(bounds.x + inset + fraction * (bounds.w - 2 * inset)),
+    y: round(bounds.y + bounds.h / 2),
+  }
+}
 export function sameBounds(a: UiBounds, b: UiBounds): boolean {
   return containsBounds(a, b) && containsBounds(b, a)
 }
