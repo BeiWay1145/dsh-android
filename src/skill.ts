@@ -95,7 +95,14 @@ only reader on text-only routes or non-macOS hosts.
 
 - **Every tap on a real phone has real consequences** — posts, likes, purchases, messages, shares. NEVER tap an unidentified control to find out what it does. If a control cannot be identified (no resource-id after a deep tree, no distinguishing text), STOP and report what you see and ask how to proceed. Do not guess coordinates on someone's live account.
 - Icon-only controls carry no OCR text by definition: the tree's \`content-desc\` is the only reliable way to find them — a bare tree means "look deeper", never "start guessing".
-- A phone must be UNLOCKED for anything to be visible; a locked screen is what the stream will faithfully show you. \`android_interact action=button name=power\` wakes it, but a PIN/pattern lock cannot be passed from here.
+- A phone must be UNLOCKED for anything to be visible; a locked screen is what the stream will faithfully show you.
+- **A lock screen is not a dead end, but it does not look like a normal screen.** Measured on MIUI: the tree drops to a handful of nodes, and a PIN pad is DRAWN rather than built from widgets, so its digits have no resource-id and never appear in \`android_ui_tree\`. That is the app's design, not a broken read — do not conclude the device or the plugin is faulty, and do not go reading source to find out why.
+- To unlock, drive the lock screen the way a person does, through raw input:
+  1. \`android_interact action=button name=power\` (or \`KEYCODE_WAKEUP\`) to light the display
+  2. \`android_interact action=gesture json={fromX:0.5,fromY:0.85,toX:0.5,toY:0.25,duration:0.3}\` to swipe the keyguard away and reveal the PIN pad
+  3. type the PIN with \`adb shell input text <pin>\` (via the shell tool, or \`android_interact action=type\`) — a PIN field accepts ASCII text directly and needs no ADBKeyboard IME
+  **Ask the user for the PIN.** Never guess it, and never write it into a file: it is theirs, it may change, and a wrong attempt can lock the device.
+- **After a lock-screen swipe, \`screencap\` can return an empty frame for ~10 s** (measured, reproducible). The plugin now recovers from that automatically and says so if it cannot; if a screenshot does come back empty, the answer is to wait or to read the tree, never to assume the device went offline.
 - \`unauthorized\` in \`android_devices\` means the USB-debugging prompt has not been accepted ON the device — no tool can fix that from this side. \`offline\` usually means it is still booting.
 - \`android_shutdown\` powers off EMULATORS only. A phone is powered off from the phone; here you simply stop using it (the stream reaps itself after five idle minutes).
 

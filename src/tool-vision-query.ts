@@ -123,10 +123,11 @@ async function captureForReading(
   } catch (error) {
     throw new Error(
       `${tool}: the screencap on ${device.serial} failed: ${errorMessage(error)}. The device itself is `
-      + 'still reachable, so treat this as a DISPLAY problem rather than a dead device: an empty frame is '
-      + 'normal while the screen is off or mid-transition (measured: a lock-screen swipe yields empty '
-      + 'captures for ~4-6 s). Wake it with android_interact action "button" name "power", then read '
-      + 'again. Do NOT re-run android_devices for this — it will report the device as healthy, because it is.',
+      + 'still reachable, so this is a DISPLAY problem, not a lost device. '
+      + 'A lock-screen gesture is the measured cause: it leaves an empty capture for ~10 s. '
+      + 'Wait or read the accessibility tree (android_ui_tree does not read the display). '
+      + 'Do NOT run android_devices for this - it reports the device as healthy, because it is.'
+      + await host.sleepingScreenNote(device.serial),
     )
   }
   const path = store.nextPath(device.serial)

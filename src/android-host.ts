@@ -438,6 +438,44 @@ export class AndroidHostController {
     }
   }
 
+
+  /**
+   * Whether the display is awake, or `undefined` when that cannot be told.
+   *
+   * Used ONLY on a failure path, to tell an agent why a read came back empty.
+   * A sleeping screen explains a whole class of confusing failures -- an empty
+   * screenshot, a tree of four nodes, a tap that appears to do nothing -- and
+   * without this the plugin's own error text used to point at a device fault
+   * instead, which sent an agent off hunting one that did not exist.
+   *
+   * Deliberately answers `undefined` rather than guessing when the probe fails:
+   * an unknown answer must never be reported to a caller as a state.
+   */
+  async isScreenAwake(serial: string): Promise<boolean | undefined> {
+    try {
+      const out = await this.toolchain.shell(serial, ['dumpsys', 'power'], { timeoutMs: CONTROL_TIMEOUT_MS })
+      const m = /mWakefulness=(\w+)/.exec(out)
+      if (m === null) return undefined
+      return m[1] === 'Awake'
+    } catch {
+      return undefined
+    }
+  }
+
+  /**
+   * A sentence explaining a sleeping screen, or '' when it is awake or unknown.
+   *
+   * Appended to failure text so the caller gets the LIKELY CAUSE and the next
+   * step, rather than a description of the symptom.
+   */
+  async sleepingScreenNote(serial: string): Promise<string> {
+    if (await this.isScreenAwake(serial) !== false) return ''
+    return ' The screen is ASLEEP right now, which alone explains an empty read: wake it with '
+      + 'android_interact action "button" name "power", then retry. If it keeps falling asleep '
+      + 'mid-task, tell the user rather than fighting it -- the plugin will not change their '
+      + "device's power settings for them."
+  }
+
   /** Capture a fresh PNG of the device (independent of the stream loop). */
   async screenshot(serial: string): Promise<{ png: Buffer; width?: number; height?: number }> {
     const capture = async (): Promise<Buffer> =>

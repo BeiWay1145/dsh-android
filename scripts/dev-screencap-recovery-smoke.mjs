@@ -90,6 +90,41 @@ function makeHost(script) {
   step('the error no longer claims the device went offline', !/gone offline/i.test(message))
 }
 
+
+// 5. The wakefulness probe, which turns a symptom into a cause.
+{
+  const { host } = makeHost([PNG])
+  const mk = (out) => {
+    const h = new AndroidHostController({
+      async execOut() { return PNG },
+      async shell() { return out },
+    })
+    return h
+  }
+  step('an Awake device reports true', await mk('mWakefulness=Awake').isScreenAwake('FAKE') === true)
+  step('an Asleep device reports false', await mk('mWakefulness=Asleep').isScreenAwake('FAKE') === false)
+  step('an unreadable state reports undefined, not a guess',
+    await mk('no useful output here').isScreenAwake('FAKE') === undefined,
+    'an unknown answer must never be reported as a state')
+  step('a probe that throws reports undefined',
+    await mk2().isScreenAwake('FAKE') === undefined)
+
+  step('an Awake device gets no note', (await mk('mWakefulness=Awake').sleepingScreenNote('FAKE')) === '')
+  const asleepNote = await mk('mWakefulness=Asleep').sleepingScreenNote('FAKE')
+  step('an Asleep device gets a note naming the cause', /ASLEEP/.test(asleepNote))
+  step('the note says how to wake it', /name \"power\"/.test(asleepNote))
+  step('the note refuses to change the device settings itself', /will not change/.test(asleepNote),
+    'the plugin must not silently alter a user device')
+  step('an unknown state gets no note', (await mk('garbage').sleepingScreenNote('FAKE')) === '')
+}
+
+function mk2() {
+  return new AndroidHostController({
+    async execOut() { return PNG },
+    async shell() { throw new Error('adb wedged') },
+  })
+}
+
 console.log('')
 console.log(`${pass}/${pass + fail} steps passed${fail === 0 ? '' : ` (${fail} FAILED)`}`)
 process.exit(fail === 0 ? 0 : 1)
