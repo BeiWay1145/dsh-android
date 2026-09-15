@@ -42,8 +42,9 @@ import {
   ensureOcrBinary,
   execOcr,
   filterOcrItems,
-  parseOcrOutput,
+  parseOcrItems,
   type OcrItem,
+  resolveOcrBinary,
 } from './ocr-backend.js'
 import {
   UI_TREE_CAP_BYTES,
@@ -83,11 +84,31 @@ export const TAP_SETTLE_MS = 300
  * Poll budget (ms) for a tap tool's `expect_text` / `expect_gone` assertion.
  * One capture+OCR round trip costs ~0.6–1 s on an emulator, so 4000 ms allows
  * a couple of polls without turning a tap into another full android_wait_for.
+ * Tesseract takes about twice as long per round trip, so its budget grows to
+ * keep the SAME number of polls rather than quietly dropping one.
  */
-export const TAP_EXPECTATION_BUDGET_MS = 4000
+export function tapExpectationBudgetMs(backend?: 'vision' | 'tesseract'): number {
+  return backend === 'tesseract' ? 8000 : 4000
+}
 
-/** Interval between OCR polls (screencap + Vision, ~0.6 s per round trip). */
-export const OCR_POLL_INTERVAL_MS = 600
+/**
+ * Interval between OCR polls, per backend.
+ *
+ * The interval must exceed one capture+OCR round trip, or every poll
+ * overruns and the assertion overshoots its budget before it can see a
+ * change. Vision answers in ~0.6 s, so 600 ms paces it correctly; Tesseract
+ * measures ~1.3 s on the same frame, so it needs the wider gap.
+ *
+ * A single constant would silently halve the number of polls a Tesseract
+ * host gets, which shows up as an intermittent false negative rather than
+ * an error -- the assertion would simply run out of budget first.
+ */
+const OCR_POLL_INTERVAL_BY_BACKEND = { vision: 600, tesseract: 1500 } as const
+
+/** Interval between OCR polls for the backend in use. */
+export function ocrPollIntervalMs(backend?: 'vision' | 'tesseract'): number {
+  return backend === undefined ? 600 : OCR_POLL_INTERVAL_BY_BACKEND[backend]
+}
 
 /**
  * The subset of `AndroidHostController` every tool module here consumes.
@@ -373,7 +394,8 @@ export async function runOcr(
     )
   }
   try {
-    return parseOcrOutput((await execOcr(binary, imagePath, signal)).stdout)
+    // parseOcrItems dispatches on the backend: Vision returns JSON, Tesseract TSV.
+    return parseOcrItems(binary, (await execOcr(binary, imagePath, signal)).stdout)
   } catch (error) {
     throw new Error(`${tool}: OCR failed for ${deviceLabel}: ${errorMessage(error)}`)
   }
@@ -478,14 +500,18 @@ export async function runTapExpectation(
   device: AndroidDevice,
   text: string,
   mode: 'appear' | 'disappear',
+  backend?: 'vision' | 'tesseract',
   signal?: AbortSignal,
 ): Promise<OcrExpectationResult> {
+  // Pacing follows the backend: a Tesseract round trip is roughly twice a
+  // Vision one, so it gets a wider gap and a larger budget to keep the same
+  // number of polls.
   const outcome = await pollForText(
     () => readOcrOnce(tool, store, host, device, signal).then(snapshot => snapshot.items),
     text,
     mode,
-    TAP_EXPECTATION_BUDGET_MS,
-    OCR_POLL_INTERVAL_MS,
+    tapExpectationBudgetMs(backend),
+    ocrPollIntervalMs(backend),
     0,
     signal,
   )
@@ -519,9 +545,12 @@ export async function captureWithExpectation(
   if (expectation === undefined) {
     return { screenshot: await captureScreenshot(tool, store, host, device, vision) }
   }
+  // The OCR backend decides the poll pacing, so resolve it once here instead
+  // of letting the assertion assume Vision timing.
+  const ocrBackend = resolveOcrBinary().backend
   const [screenshot, expected] = await Promise.all([
     captureScreenshot(tool, store, host, device, vision),
-    runTapExpectation(tool, store, host, device, expectation.text, expectation.mode, signal),
+    runTapExpectation(tool, store, host, device, expectation.text, expectation.mode, ocrBackend, signal),
   ])
   return { screenshot, expected }
 }

@@ -47,8 +47,19 @@ import { homedir } from 'node:os'
 import { delimiter, dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { pluginEnv } from './plugin-env.js'
+import {
+  execTesseractTsv,
+  parseTesseractTsv,
+  resolveTesseract,
+  type TesseractBinary,
+} from './ocr-tesseract.js'
 
 /** Install hint appended to every helper-unavailable tool error. */
+/** Install hint for hosts where neither backend is present. */
+export const TESSERACT_INSTALL_HINT = 'install Tesseract so android_find_text / android_tap_text / '
+  + 'android_wait_for can run on this platform: https://tesseract-ocr.github.io (Windows builds include '
+  + "an installer; make sure the chi_sim language data is selected)"
+
 export const OCR_INSTALL_HINT = 'the plugin compiles its bundled Vision OCR helper with swiftc on first use — '
   + 'install Xcode (or the Command Line Tools: run "xcode-select --install") so android_find_text / '
   + 'android_tap_text / android_wait_for can run'
@@ -62,7 +73,7 @@ const OCR_EXEC_TIMEOUT_MS = 120_000
 const OCR_MAX_BUFFER_BYTES = 8 * 1024 * 1024
 
 /** Where the resolved OCR helper came from. */
-export type OcrBinarySource = 'path' | 'cache' | 'unavailable'
+export type OcrBinarySource = 'path' | 'cache' | 'tesseract' | 'unavailable'
 
 /** One resolved OCR helper binary. */
 export interface OcrBinary {
@@ -74,6 +85,12 @@ export interface OcrBinary {
   reason?: string
   /** One-line install hint for the model (always set when unavailable). */
   installHint: string
+  /**
+   * Which engine this binary represents. Absent means the bundled Vision helper
+   * (macOS), which is the historical case; 'tesseract' is the cross-platform
+   * fallback, and it decides how output is parsed.
+   */
+  backend?: 'vision' | 'tesseract'
   /** True when everything needed to compile the bundled helper exists. */
   compilable?: boolean
 }
@@ -204,13 +221,27 @@ function validCachedBinary(sourceSha256: string): string | undefined {
  */
 export function resolveOcrBinary(): OcrBinary {
   if (process.platform !== 'darwin') {
+    // NOT a hard gate any more: the bundled helper needs Vision (macOS only),
+    // but Tesseract covers every other platform, so OCR is still available.
+    // See ocr-tesseract.ts for why CJK needs line re-grouping to be matchable.
+    const tesseract = resolveTesseract()
+    if (tesseract.available) {
+      return {
+        available: true,
+        source: 'tesseract',
+        command: tesseract.command,
+        backend: 'tesseract',
+        installHint: OCR_INSTALL_HINT,
+      }
+    }
     return {
       available: false,
       source: 'unavailable',
-      reason: `OCR needs the Vision framework of a macOS host, and this host runs ${process.platform} — `
-        + 'the device side is pure adb, but the recognition itself happens on the machine running DSH. '
-        + 'Use android_ui_tree / android_tap_element (uiautomator works on every host) instead',
-      installHint: OCR_INSTALL_HINT,
+      reason: `OCR needs either the Vision framework of a macOS host or Tesseract, and this host `
+        + `runs ${process.platform} with no Tesseract found (${tesseract.reason ?? 'unknown'}). `
+        + 'Install Tesseract (https://tesseract-ocr.github.io) with the chi_sim language data, or use '
+        + 'android_ui_tree / android_tap_element, which read the accessibility hierarchy and work on every host',
+      installHint: TESSERACT_INSTALL_HINT,
     }
   }
   const source = resolveOcrSwiftSource()
@@ -245,16 +276,27 @@ export function resolveOcrBinary(): OcrBinary {
   }
 }
 
-/** Run the compiled helper. Non-zero exits raise with its stderr/stdout. */
+/**
+ * Run the resolved OCR backend over one image.
+ *
+ * The RETURN SHAPE depends on the backend and callers should not care: use
+ * parseOcrItems() below, which dispatches on the same field.
+ */
 export function execOcr(
   binary: OcrBinary,
   imagePath: string,
   signal?: AbortSignal,
   timeoutMs = OCR_EXEC_TIMEOUT_MS,
 ): Promise<{ stdout: string; stderr: string }> {
+  if (binary.backend === 'tesseract') {
+    return execTesseractTsv(tesseractOf(binary), imagePath, signal, timeoutMs).then(
+      stdout => ({ stdout, stderr: '' }),
+    )
+  }
   if (!binary.available || binary.command === undefined) {
     return Promise.reject(new Error(`the OCR helper is unavailable${binary.reason === undefined ? '' : ` (${binary.reason})`}; ${binary.installHint}`))
   }
+
   return new Promise((resolve, reject) => {
     execFile(binary.command!, [imagePath], {
       timeout: timeoutMs,
@@ -269,6 +311,22 @@ export function execOcr(
       resolve({ stdout, stderr })
     })
   })
+}
+
+/** Rebuild the Tesseract view of a resolved binary (it carries only a path). */
+function tesseractOf(binary: OcrBinary): TesseractBinary {
+  return { available: binary.available, ...(binary.command === undefined ? {} : { command: binary.command }) }
+}
+
+/**
+ * Parse whatever the resolved backend emitted into OCR items.
+ *
+ * Vision returns JSON; Tesseract returns TSV whose Chinese words arrive split
+ * per character (see ocr-tesseract.ts). Dispatching here means the tools never
+ * learn which engine ran.
+ */
+export function parseOcrItems(binary: OcrBinary, stdout: string): OcrItem[] {
+  return binary.backend === 'tesseract' ? parseTesseractTsv(stdout) : parseOcrOutput(stdout)
 }
 
 /**

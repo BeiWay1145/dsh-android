@@ -35,9 +35,10 @@ import {
   rectCenter,
   type OcrItem,
   type OcrRect,
+  resolveOcrBinary,
 } from './ocr-backend.js'
 import {
-  OCR_POLL_INTERVAL_MS,
+  ocrPollIntervalMs,
   ScreenshotStore,
   TAP_SETTLE_MS,
   boundsSchema,
@@ -404,7 +405,7 @@ export function createAndroidOcrTools(host: AndroidToolHost, options: AndroidUiT
         text,
         mode,
         timeoutMs,
-        OCR_POLL_INTERVAL_MS,
+        ocrPollIntervalMs(resolveOcrBinary().backend),
         minConfidence,
         exec.signal,
       )

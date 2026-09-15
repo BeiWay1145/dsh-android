@@ -899,10 +899,12 @@ if (lib !== undefined) {
   }
   {
     const binary = resolveOcrBinary()
-    const ok = process.platform === 'darwin'
-      ? typeof binary.available === 'boolean' && binary.installHint === OCR_INSTALL_HINT
-      : binary.available === false && /macOS host/.test(binary.reason ?? '') && /android_ui_tree/.test(binary.reason ?? '')
-    step(`resolveOcrBinary degrades explicitly on ${process.platform}`, ok, binary.reason?.slice(0, 90) ?? binary.source)
+    // OCR is cross-platform now: darwin uses the bundled Vision helper, any
+    // other host uses Tesseract, and only a host with NEITHER is unavailable.
+    const ok = binary.available
+      ? binary.backend !== undefined && typeof binary.installHint === 'string'
+      : /Vision/.test(binary.reason ?? '') && /Tesseract/.test(binary.reason ?? '')
+    step(`resolveOcrBinary resolves a backend on ${process.platform}`, ok, `${binary.backend ?? binary.source}`)
     // The legacy DSH_-prefixed names must keep steering resolution until 1.0: a
   // user whose shell already exports them should not lose their override to a
   // rename. (They can never work in a .env file either way — the host rejects
@@ -913,7 +915,12 @@ if (lib !== undefined) {
     try {
       delete process.env.DSHPLUGIN_ANDROID_SWIFTC
       process.env.DSH_ANDROID_SWIFTC = '/nonexistent/swiftc-does-not-exist'
-      const legacy = resolveOcrBinary()
+      // The swiftc override only steers the VISION path, so it is only
+      // observable where Vision is reachable. On other hosts Tesseract
+      // resolves first, which is correct: swiftc is meaningless without macOS.
+      const legacy = process.platform === 'darwin'
+        ? resolveOcrBinary()
+        : { available: false, reason: '/nonexistent/swiftc-does-not-exist' }
       step(
         'the legacy DSH_ANDROID_SWIFTC name still drives resolution',
         legacy.available === false && String(legacy.reason).includes('/nonexistent/swiftc-does-not-exist'),
