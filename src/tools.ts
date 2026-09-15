@@ -64,6 +64,7 @@ export const ANDROID_TOOL_NAMES = [
   'android_shutdown',
   'android_screenshot',
   'android_interact',
+  'android_ime',
   'android_list_apps',
   'android_launch_app',
   'android_build_run',
@@ -76,6 +77,18 @@ export interface AndroidDeviceListing extends AndroidDeviceInfo {
   model?: string
   product?: string
   sdk?: number
+  /**
+   * `ro.product.board` -- the hardware board, e.g. `elish`.
+   *
+   * Reported next to the possibly-spoofed `model` because a flashed device
+   * advertises the PORTED model: a session concluded several times that the
+   * device was a Xiaomi Pad when it was a Lenovo board running MIUI. `board`
+   * comes from the ROM's hardware config and is much harder to inherit by
+   * accident.
+   */
+  board?: string
+  /** `ro.product.device` -- the device codename (a second hardware-rooted name). */
+  productDevice?: string
   /** AVD name, when the emulator console answered. */
   avdName?: string
   /** True for the device the panel is currently streaming. */
@@ -109,6 +122,15 @@ export interface AndroidShutdownResult {
 
 export interface AndroidInteractResult extends AndroidScreenshotResult {
   action: AndroidInteractAction
+  /**
+   * For `button` with name power: the display state BEFORE the press.
+   *
+   * power is a TOGGLE, so a caller who does not know the state can turn a lit
+   * screen OFF while meaning to wake it. This reports what actually happened
+   * rather than leaving the caller to assume. Absent when the state could not
+   * be read -- an unknown answer is omitted, never guessed.
+   */
+  powerStateBefore?: 'awake' | 'asleep'
 }
 
 export interface AndroidToolsOptions {
@@ -121,6 +143,7 @@ export interface AndroidToolsOptions {
 /** The eight core tool definitions bound to one host controller. */
 export interface AndroidTools {
   androidDevices: ToolDefinition
+  androidIme: ToolDefinition
   androidBoot: ToolDefinition
   androidShutdown: ToolDefinition
   androidScreenshot: ToolDefinition
@@ -172,6 +195,9 @@ export function createAndroidTools(host: AndroidHostController, options: Android
                 product: { type: 'string' },
                 sdk: { type: 'integer' },
                 avdName: { type: 'string' },
+                // Closed schema: an undeclared field rejects the whole result.
+                board: { type: 'string' },
+                productDevice: { type: 'string' },
                 streaming: { type: 'boolean' },
               },
             },
@@ -214,6 +240,8 @@ export function createAndroidTools(host: AndroidHostController, options: Android
           ...(device.product === undefined ? {} : { product: device.product }),
           ...(details?.sdk === undefined ? {} : { sdk: details.sdk }),
           ...(details?.avdName === undefined ? {} : { avdName: details.avdName }),
+          ...(details?.board === undefined ? {} : { board: details.board }),
+          ...(details?.productDevice === undefined ? {} : { productDevice: details.productDevice }),
           ...(device.serial === streamed ? { streaming: true } : {}),
         })
       }
@@ -485,6 +513,9 @@ export function createAndroidTools(host: AndroidHostController, options: Android
         additionalProperties: false,
         properties: {
           action: { type: 'string', required: true, enum: [...INTERACT_ACTIONS] },
+          // Closed output schema: an undeclared field makes the host reject
+          // the WHOLE result and takes the tool down entirely.
+          powerStateBefore: { type: 'string' },
           path: { type: 'string', required: true },
           bytes: { type: 'integer', required: true },
           width: { type: 'integer' },
@@ -499,8 +530,9 @@ export function createAndroidTools(host: AndroidHostController, options: Android
     timeoutMs: 180_000,
     async execute(args: AndroidInteractArgs, exec) {
       const { device, summary } = await resolveTarget(host, 'android_interact', args.device)
+      let buttonResult: { powerStateBefore?: 'awake' | 'asleep' } = {}
       try {
-        await performInteract(host, device.serial, args)
+        buttonResult = await performInteract(host, device.serial, args)
       } catch (error) {
         const message = errorMessage(error)
         if (message.startsWith('android_interact:')) throw error
@@ -514,7 +546,7 @@ export function createAndroidTools(host: AndroidHostController, options: Android
       await sleep(INTERACT_SETTLE_MS)
       const screenshot = await captureScreenshot(host, screenshots, 'android_interact', device, summary,
         vision === undefined ? undefined : { services: vision, exec })
-      return { action: args.action, ...screenshot } satisfies AndroidInteractResult
+      return { action: args.action, ...buttonResult, ...screenshot } satisfies AndroidInteractResult
     },
     presentCall: (args: AndroidInteractArgs) => ({
       card: 'generic',
@@ -532,6 +564,103 @@ export function createAndroidTools(host: AndroidHostController, options: Android
     }),
   })
 
+  const androidIme = defineTool({
+    name: 'android_ime',
+    description: 'Install and enable the ADBKeyboard IME so android_interact action "type" can '
+      + 'deliver NON-ASCII text (CJK, emoji) — `adb shell input text` cannot. The plugin never '
+      + 'downloads this keyboard itself: it is third-party software with full input access, so '
+      + 'action "install" takes apk_path pointing at a file YOU obtained from '
+      + 'github.com/senzhk/ADBKeyBoard, installs it, enables it and makes it the active IME, and '
+      + 'reports the IME it replaced so action "restore" can put that back. A device left on a '
+      + 'debug keyboard is a change the user did not ask for, so restore when the task is done.',
+    parameters: {
+      device: {
+        type: 'string',
+        description: 'Target adb serial. Defaults to the streamed device, else the only online one.',
+      },
+      action: {
+        type: 'string',
+        required: true,
+        enum: ['status', 'install', 'restore'],
+        description: 'status: report whether ADBKeyboard is installed and selected. '
+          + 'install: install apk_path and select it. restore: set ime_id back as the active IME.',
+      },
+      apk_path: {
+        type: 'string',
+        description: 'Device-side path of the ADBKeyboard APK (required for install). Push it '
+          + 'yourself first, e.g. to /data/local/tmp/ADBKeyboard.apk.',
+      },
+      ime_id: {
+        type: 'string',
+        description: 'The IME id to restore (required for restore) — the previousIme this tool '
+          + 'returned from install.',
+      },
+    },
+    output: {
+      schema: {
+        type: 'object',
+        additionalProperties: false,
+        properties: {
+          device: { ...deviceSchema, required: true },
+          action: { type: 'string', required: true },
+          installed: { type: 'boolean', required: true },
+          selected: { type: 'boolean' },
+          previousIme: { type: 'string' },
+          currentIme: { type: 'string' },
+          hint: { type: 'string' },
+        },
+      },
+      render: renderJson,
+    },
+    timeoutMs: 180_000,
+    isConcurrencySafe: () => false,
+    async execute(args: { device?: string; action: string; apk_path?: string; ime_id?: string }) {
+      const { device, summary } = await resolveTarget(host, 'android_ime', args.device)
+      if (args.action === 'install') {
+        if (typeof args.apk_path !== 'string' || args.apk_path.trim() === '') {
+          throw new Error('android_ime: action "install" requires apk_path (the device-side path of the ADBKeyboard APK)')
+        }
+        const result = await host.installAdbKeyboard(device.serial, args.apk_path.trim())
+        return {
+          device: summary,
+          action: 'install',
+          installed: result.installed,
+          selected: true,
+          ...(result.previousIme === undefined ? {} : { previousIme: result.previousIme }),
+          hint: result.previousIme === undefined
+            ? 'ADBKeyboard is now the active IME. Non-ASCII android_interact action "type" will work.'
+            : 'ADBKeyboard is now the active IME. When the task is done, call android_ime action '
+              + `"restore" with ime_id ${result.previousIme} to put the user's keyboard back.`,
+        }
+      }
+      if (args.action === 'restore') {
+        if (typeof args.ime_id !== 'string' || args.ime_id.trim() === '') {
+          throw new Error('android_ime: action "restore" requires ime_id (the previousIme reported by install)')
+        }
+        await host.restoreIme(device.serial, args.ime_id.trim())
+        return { device: summary, action: 'restore', installed: true, currentIme: args.ime_id.trim() }
+      }
+      const imes = await host.toolchain.shell(device.serial, ['ime', 'list', '-s'], { timeoutMs: 30_000 })
+      const installed = imes.includes('com.android.adbkeyboard')
+      const current = await host.toolchain
+        .shell(device.serial, ['settings', 'get', 'secure', 'default_input_method'], { timeoutMs: 30_000 })
+        .then(out => out.trim())
+        .catch(() => '')
+      return {
+        device: summary,
+        action: 'status',
+        installed,
+        selected: current.includes('adbkeyboard'),
+        ...(current === '' ? {} : { currentIme: current }),
+        ...(installed
+          ? {}
+          : { hint: 'ADBKeyboard is NOT installed, so non-ASCII typing is unavailable. Download its APK '
+              + 'from github.com/senzhk/ADBKeyBoard, push it to the device, then call this tool with '
+              + 'action "install" and apk_path.' }),
+      }
+    },
+  })
+
   const appTools = createAndroidAppTools(host)
   return {
     androidDevices,
@@ -539,6 +668,7 @@ export function createAndroidTools(host: AndroidHostController, options: Android
     androidShutdown,
     androidScreenshot,
     androidInteract,
+    androidIme,
     ...appTools,
   }
 }

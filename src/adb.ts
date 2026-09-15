@@ -85,6 +85,22 @@ export interface AndroidDeviceDetails {
   sdk?: number
   /** The AVD name for an emulator, when the console answers. */
   avdName?: string
+  /**
+   * `ro.product.board` -- the hardware board, e.g. `elish` or `nabu`.
+   *
+   * Reported because `model` is trivially spoofed and routinely IS spoofed: a
+   * device flashed with a ported ROM advertises the ported model, not its own.
+   * A reported session concluded several times that the device was a Xiaomi
+   * Pad (`M2105K81AC`) when it was a Lenovo board running MIUI, and every
+   * model-based judgement after that was wrong. The board name comes from the
+   * ROM's hardware config and is far less likely to be a borrowed string.
+   */
+  board?: string
+  /**
+   * `ro.product.device` -- the device codename, another hardware-rooted name.
+   * Differs from `board` on some vendors, so both are reported.
+   */
+  productDevice?: string
 }
 
 function errorMessage(error: unknown): string {
@@ -393,14 +409,17 @@ export class AdbToolchain {
     const details: AndroidDeviceDetails = { serial: device.serial }
     try {
       const output = await this.shell(device.serial, [
-        'getprop ro.product.model; getprop ro.product.manufacturer; getprop ro.build.version.release; getprop ro.build.version.sdk',
+        'getprop ro.product.model; getprop ro.product.manufacturer; getprop ro.build.version.release; '
+        + 'getprop ro.build.version.sdk; getprop ro.product.board; getprop ro.product.device',
       ])
-      const [model, manufacturer, release, sdk] = output.split('\n').map(line => line.trim())
+      const [model, manufacturer, release, sdk, board, productDevice] = output.split('\n').map(line => line.trim())
       if (model !== undefined && model !== '') details.model = model
       if (manufacturer !== undefined && manufacturer !== '') details.manufacturer = manufacturer
       if (release !== undefined && release !== '') details.androidVersion = release
       const sdkNumber = Number(sdk)
       if (Number.isSafeInteger(sdkNumber) && sdkNumber > 0) details.sdk = sdkNumber
+      if (board !== undefined && board !== '') details.board = board
+      if (productDevice !== undefined && productDevice !== '') details.productDevice = productDevice
     } catch {
       // A flaky/offline device still lists; details just stay sparse.
     }

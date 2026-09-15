@@ -143,9 +143,21 @@ export function isInputTextSafe(text: string): boolean {
 }
 
 export const NON_ASCII_TYPE_HINT
-  = 'the text contains non-ASCII characters, which `adb shell input text` cannot deliver; '
-  + 'install the ADBKeyboard IME on the device (github.com/senzhk/ADBKeyBoard) and select it, '
-  + 'or type via the focused app\'s own UI'
+  = 'the text contains non-ASCII characters, which `adb shell input text` cannot deliver. '
+  + 'ADBKeyboard (github.com/senzhk/ADBKeyBoard) can: download its APK, then call '
+  + 'android_ime with action "install" and apk_path pointing at that file, and it will be '
+  + 'installed and enabled. Or type via the focused app\'s own UI'
+
+/**
+ * The IME package that makes non-ASCII typing possible.
+ *
+ * Deliberately NOT downloaded by this plugin. It is a third-party keyboard with
+ * full input access, and a plugin that fetches and installs such a thing on its
+ * own initiative is not a trade this code should make silently. The caller
+ * supplies the APK; this code installs and selects it, and says what is missing
+ * when it cannot.
+ */
+export const ADB_KEYBOARD_PACKAGE = 'com.android.adbkeyboard'
 
 /** Lifecycle manager for the (single) in-process Android device stream. */
 export class AndroidHostController {
@@ -358,8 +370,18 @@ export class AndroidHostController {
     ], { timeoutMs: CONTROL_TIMEOUT_MS + durationMs })
   }
 
-  /** Press a navigation/hardware button by panel name or raw KEYCODE_*. */
-  async button(serial: string, name = 'home'): Promise<void> {
+  /**
+   * Press a navigation/hardware button by panel name or raw KEYCODE_*.
+   *
+   * `power` is a TOGGLE, and a caller who does not know the current state can
+   * turn a lit screen OFF while meaning to wake it. Reported from a real
+   * session where exactly that happened mid-automation. The keypress itself is
+   * unchanged (it has to be: KEYCODE_POWER is what `input keyevent` offers),
+   * but the state BEFORE the press is sampled and returned so the caller can
+   * see what it actually did instead of assuming. Prefer deviceAction 'wake'
+   * or 'lock' when the intent is known -- those are directional.
+   */
+  async button(serial: string, name = 'home'): Promise<{ powerStateBefore?: 'awake' | 'asleep' }> {
     const keycode = (ANDROID_BUTTONS as Record<string, string>)[name]
       ?? (/^KEYCODE_[A-Z0-9_]+$/.test(name) ? name : undefined)
     if (keycode === undefined) {
@@ -368,7 +390,13 @@ export class AndroidHostController {
         [],
       )
     }
+    // Sampling only costs one adb round trip and only for the toggle. An
+    // UNKNOWN answer is omitted rather than guessed, so the caller can always
+    // tell 'it was awake' from 'we could not tell'.
+    const before = keycode === 'KEYCODE_POWER' ? await this.isScreenAwake(serial) : undefined
     await this.toolchain.shell(serial, ['input', 'keyevent', keycode], { timeoutMs: CONTROL_TIMEOUT_MS })
+    if (before === undefined) return {}
+    return { powerStateBefore: before ? 'awake' : 'asleep' }
   }
 
   /**
@@ -392,6 +420,46 @@ export class AndroidHostController {
     await this.toolchain.shell(serial, [
       'am', 'broadcast', '-a', 'ADB_INPUT_B64', '--es', 'msg', encoded,
     ], { timeoutMs: CONTROL_TIMEOUT_MS })
+  }
+
+  /**
+   * Install ADBKeyboard from a LOCAL apk and make it the active IME.
+   *
+   * Turns the non-ASCII dead end into one call. The APK is never fetched here:
+   * the caller points at a file it has, which keeps this plugin out of the
+   * business of silently installing a keyboard that can read every keystroke.
+   *
+   * Enabling it also SAVES the previous IME so `restoreIme` can put it back -- a
+   * device left on a debug keyboard is a surprise the user did not ask for.
+   */
+  async installAdbKeyboard(serial: string, apkPath: string): Promise<{ installed: boolean; previousIme?: string }> {
+    const previousIme = await this.toolchain
+      .shell(serial, ['settings', 'get', 'secure', 'default_input_method'], { timeoutMs: CONTROL_TIMEOUT_MS })
+      .then(out => out.trim())
+      .catch(() => '')
+    const installed = await this.toolchain
+      .shell(serial, ['pm', 'install', '-r', '-g', apkPath], { timeoutMs: 120_000 })
+      .catch(error => `FAILED ${error instanceof Error ? error.message : String(error)}`)
+    if (!/Success/i.test(installed)) {
+      throw new AdbError(
+        `dsh-android: could not install the ADBKeyboard APK from ${apkPath}: ${installed.trim().slice(0, 200)}`,
+        [],
+      )
+    }
+    // `ime enable` alone does not select it; both are required.
+    await this.toolchain.shell(serial, ['ime', 'enable', `${ADB_KEYBOARD_PACKAGE}/.AdbIME`], { timeoutMs: CONTROL_TIMEOUT_MS })
+      .catch(() => '')
+    await this.toolchain.shell(serial, ['ime', 'set', `${ADB_KEYBOARD_PACKAGE}/.AdbIME`], { timeoutMs: CONTROL_TIMEOUT_MS })
+      .catch(() => '')
+    return {
+      installed: true,
+      ...(previousIme === '' ? {} : { previousIme }),
+    }
+  }
+
+  /** Put back the IME that was active before installAdbKeyboard ran. */
+  async restoreIme(serial: string, imeId: string): Promise<void> {
+    await this.toolchain.shell(serial, ['ime', 'set', imeId], { timeoutMs: CONTROL_TIMEOUT_MS }).catch(() => '')
   }
 
   /** Force the display rotation (Surface.ROTATION_0..3). */

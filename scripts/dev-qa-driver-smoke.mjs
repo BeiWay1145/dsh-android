@@ -330,9 +330,10 @@ if (driver !== undefined) {
     const refuse = createAndroidQaBackend({ toolchain: makeFake({ imeList: '' }).toolchain })
     await expectThrow(
       step,
-      'non-ASCII type refused with the ADBKeyboard hint when the IME is absent',
+      'non-ASCII type refused with an ACTIONABLE ADBKeyboard hint when the IME is absent',
       () => refuse.type('emulator-5554', '你好'),
-      /ADBKeyboard IME/,
+      // The hint must name the tool that fixes it, not just the product.
+      /ADBKeyboard[\s\S]*android_ime/,
     )
     await refuse.dispose()
 

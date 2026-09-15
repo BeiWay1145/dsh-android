@@ -391,7 +391,9 @@ export async function performInteract(
   host: AndroidHostController,
   serial: string,
   args: AndroidInteractArgs,
-): Promise<void> {
+// Returns the power state BEFORE a power press, so the toggle's effect is
+// observable; every other action returns nothing.
+): Promise<{ powerStateBefore?: 'awake' | 'asleep' }> {
   switch (args.action) {
     case 'tap': {
       const x = finiteNumber(args.x)
@@ -403,14 +405,14 @@ export async function performInteract(
         throw new Error(`android_interact: tap x/y must be within 0..1, got x=${String(args.x)} y=${String(args.y)}`)
       }
       await host.tap(serial, x, y)
-      return
+      return {}
     }
     case 'type': {
       if (typeof args.text !== 'string' || args.text === '') {
         throw new Error('android_interact: action "type" requires a non-empty text')
       }
       await host.type(serial, args.text)
-      return
+      return {}
     }
     case 'button': {
       if (typeof args.name !== 'string' || args.name.trim() === '') {
@@ -419,16 +421,15 @@ export async function performInteract(
           + `${Object.keys(ANDROID_BUTTONS).join(', ')}, or a raw KEYCODE_* name`,
         )
       }
-      await host.button(serial, args.name.trim())
-      return
+      return await host.button(serial, args.name.trim())
     }
     case 'gesture': {
       await host.drag(serial, gestureDragOf(args.json))
-      return
+      return {}
     }
     case 'scroll': {
       await host.drag(serial, { ...androidScrollPath(args), duration: SCROLL_DURATION_S })
-      return
+      return {}
     }
   }
 }
