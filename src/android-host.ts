@@ -25,6 +25,17 @@ const DEFAULT_RESTART_DELAY_MS = 5_000
 const KEEP_ALIVE_TICK_MS = 1_000
 const FIRST_FRAME_TIMEOUT_MS = 15_000
 const CONTROL_TIMEOUT_MS = 30_000
+
+/** Wait before re-reading once, when `screencap` returns an empty frame. */
+const SCREENCAP_RETRY_DELAY_MS = 250
+/**
+ * Settle time around each display-cycle key during recovery.
+ *
+ * The recovery itself is fast (measured under 1 s end to end), so these only
+ * need to cover the input and display settling, not the ~10.3 s display state
+ * that CAUSED the empty capture.
+ */
+const SCREENCAP_RECOVERY_SETTLE_MS = 600
 /** Longest `input swipe` duration accepted (ms). */
 const MAX_SWIPE_MS = 5_000
 
@@ -429,11 +440,70 @@ export class AndroidHostController {
 
   /** Capture a fresh PNG of the device (independent of the stream loop). */
   async screenshot(serial: string): Promise<{ png: Buffer; width?: number; height?: number }> {
-    const png = await this.toolchain.execOut(serial, ['screencap', '-p'], { timeoutMs: CONTROL_TIMEOUT_MS })
-    if (png.length === 0) throw new AdbError('dsh-android: screencap produced no output', ['screencap', '-p'])
+    const capture = async (): Promise<Buffer> =>
+      this.toolchain.execOut(serial, ['screencap', '-p'], { timeoutMs: CONTROL_TIMEOUT_MS })
+
+    let png = await capture()
+
+    // INTERMITTENT empty frame: retry once, cheaply. Most empty captures are a
+    // single missed frame during a transition.
+    if (png.length === 0) {
+      await new Promise(resolve => setTimeout(resolve, SCREENCAP_RETRY_DELAY_MS))
+      png = await capture()
+    }
+
+    // STUCK empty frames: a known display state, recovered by cycling the display.
+    //
+    // Measured on a Xiaomi Pad 5 (MIUI 14): a swipe on the LOCK SCREEN leaves
+    // `screencap -p` returning a zero-byte frame, reproducibly, for about
+    // 10.3 s (10.2-10.5 s over 6 trials). Waiting it out is not an option for a
+    // tool call, and retrying cannot cover it. Two measurements shape the
+    // recovery below:
+    //
+    //   KEYCODE_WAKEUP does NOT clear it (0 bytes before and after, 3/3).
+    //   KEYCODE_POWER DOES clear it (5/5), and POWER followed by WAKEUP leaves
+    //   the screen genuinely awake with a normal ~5 MB frame (3/3).
+    //
+    // So the recovery is a display cycle, not a retry loop. This matters well
+    // beyond a slow screenshot: in a recorded session an agent hit exactly this
+    // on a lock-screen swipe, and because the error said the device 'may have
+    // gone offline' it spent 38 tool calls and ~3.2 M cached tokens reading its
+    // own plugin source to find a fault that was never there.
+    if (png.length === 0) {
+      await this.toolchain
+        .shell(serial, ['input', 'keyevent', 'KEYCODE_POWER'], { timeoutMs: CONTROL_TIMEOUT_MS })
+        .catch(() => '')
+      await new Promise(resolve => setTimeout(resolve, SCREENCAP_RECOVERY_SETTLE_MS))
+      await this.toolchain
+        .shell(serial, ['input', 'keyevent', 'KEYCODE_WAKEUP'], { timeoutMs: CONTROL_TIMEOUT_MS })
+        .catch(() => '')
+      await new Promise(resolve => setTimeout(resolve, SCREENCAP_RECOVERY_SETTLE_MS))
+      png = await capture()
+      if (png.length > 0) this.#lastRecoveredEmptyCapture = true
+    }
+
+    if (png.length === 0) {
+      throw new AdbError(
+        `dsh-android: screencap kept returning an EMPTY frame on ${serial}, even after cycling the display. `
+        + 'The device is REACHABLE (adb answered every command), so this is a display state, not a lost device: '
+        + 'the known cause is a lock-screen gesture leaving the display mid-transition for ~10 s. '
+        + 'Do not run android_devices looking for a fault — it will report the device as healthy, because it is. '
+        + 'Read the screen with android_ui_tree (the accessibility tree does not read the display) and act by '
+        + 'identity, or retry once the transition has finished.',
+        ['screencap', '-p'],
+      )
+    }
     const { pngDimensions } = await import('./frame-source.js')
     const size = pngDimensions(png)
     return { png, ...(size === undefined ? {} : size) }
+  }
+
+  /** True when the last screenshot needed the display-cycle recovery. */
+  #lastRecoveredEmptyCapture = false
+
+  /** Whether the most recent capture had to recover from a stuck empty frame. */
+  get lastCaptureRecovered(): boolean {
+    return this.#lastRecoveredEmptyCapture
   }
 
   /**

@@ -122,8 +122,11 @@ async function captureForReading(
     shot = await host.screenshot(device.serial)
   } catch (error) {
     throw new Error(
-      `${tool}: the screencap on ${device.serial} failed: ${errorMessage(error)} — the device may have gone `
-      + 'offline; run android_devices to check',
+      `${tool}: the screencap on ${device.serial} failed: ${errorMessage(error)}. The device itself is `
+      + 'still reachable, so treat this as a DISPLAY problem rather than a dead device: an empty frame is '
+      + 'normal while the screen is off or mid-transition (measured: a lock-screen swipe yields empty '
+      + 'captures for ~4-6 s). Wake it with android_interact action "button" name "power", then read '
+      + 'again. Do NOT re-run android_devices for this — it will report the device as healthy, because it is.',
     )
   }
   const path = store.nextPath(device.serial)
