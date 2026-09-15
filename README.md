@@ -27,8 +27,8 @@
 > **Fork note.** This is a fork of the upstream plugin (see [FORK.md](./FORK.md))
 > with changes measured against upstream rc.8 on real hardware.
 >
-> - A UI-tree read goes from **~2450 ms to ~11 ms** (p50, tool layer): an optional
->   on-device bridge does the work, and re-reading an unchanged screen costs **2-4 ms**.
+> - A UI-tree read goes from **~2200 ms to 2-4 ms** (p50, measured against a compiled
+>   upstream checkout on real hardware - ~730x): an optional on-device bridge does the work.
 > - `android_ui_tree` gains an opt-in `view: "actionable"` shape, **56-59% fewer
 >   tokens** on real screens. The default is unchanged: omitting `view` is byte-identical to `full`.
 > - Two upstream bugs are fixed: **every tap landed up to 35 px off** (a target near the
