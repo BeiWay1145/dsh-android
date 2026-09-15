@@ -357,6 +357,17 @@ if (lib !== undefined) {
   }
   step('isOffscreenBounds is geometric', isOffscreenBounds({ x: 0, y: 2400, w: 100, h: 100 }, fixtureScreen)
     && !isOffscreenBounds({ x: 0, y: 0, w: 10, h: 10 }, fixtureScreen))
+  // A zero-AREA box INSIDE the screen is not tappable either. MIUI reports
+  // recycled RecyclerView rows as [x,1000][x+200,1000]; tapping its 'center'
+  // hits whatever is actually there. Reported from a real session where this
+  // cost four failed tap attempts before the cause was understood.
+  step('a zero-HEIGHT box inside the screen is not tappable',
+    isOffscreenBounds({ x: 100, y: 1000, w: 200, h: 0 }, fixtureScreen))
+  step('a zero-WIDTH box inside the screen is not tappable',
+    isOffscreenBounds({ x: 500, y: 1000, w: 0, h: 100 }, fixtureScreen))
+  step('a normal box at the same position IS tappable',
+    !isOffscreenBounds({ x: 100, y: 1000, w: 200, h: 100 }, fixtureScreen),
+    'the zero-size rule must not refuse real targets')
   step('boundsCenter rounds to whole pixels', JSON.stringify(boundsCenter({ x: 0, y: 0, w: 101, h: 51 })) === '{"x":51,"y":26}')
 
   // ── D. selector resolution ─────────────────────────────────────────────────

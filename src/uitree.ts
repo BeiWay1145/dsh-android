@@ -600,7 +600,19 @@ export function treePixelToInput(
  */
 export function isOffscreenBounds(bounds: UiBounds, screen: { width: number; height: number }): boolean {
   if (screen.width <= 0 || screen.height <= 0) return false
-  // A zero-size box can never be tapped, so it counts as off-screen too.
+  // A zero-AREA box can never be tapped, so it counts as off-screen too. This
+  // has to be checked on its own, not inferred from the bounds test below: a
+  // box with w=0 or h=0 at a real position is INSIDE the screen, and its
+  // 'center' is a degenerate point on its own edge.
+  //
+  // This is the shape MIUI reports for a recycled or collapsed RecyclerView
+  // row -- bounds like [x,1000][x+200,1000]. Measured: such a node passed the
+  // gate, was tapped at that edge point, and the tap landed on whatever
+  // actually occupied it. The observer reasonably concluded their aim was off
+  // and retried four times, when the real problem was that the target had no
+  // area to hit. The comment below already stated the rule; only the
+  // out-of-screen half of it was implemented.
+  if (bounds.w <= 0 || bounds.h <= 0) return true
   return bounds.x + bounds.w <= 0
     || bounds.y + bounds.h <= 0
     || bounds.x >= screen.width
