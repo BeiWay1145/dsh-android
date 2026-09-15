@@ -64,6 +64,19 @@ export interface DetectRowsResult {
   repeatedGroups: number
   /** Row candidates dropped because they lie entirely off-screen. */
   omittedOffscreen: number
+  /**
+   * Labeled sibling runs that fell JUST SHORT of the repetition threshold.
+   *
+   * Reported so a dropped row is visible rather than silent. Measured on a
+   * real Settings screen: the tree carried `更多设置` as a labelled sibling of
+   * two other titles, and android_ui_rows returned three rows that did not
+   * include it, with hint and omittedOffscreen both empty. A caller had no way
+   * to tell a complete row list from a truncated one.
+   *
+   * The threshold itself is deliberate (see MIN_REPEATED_ROWS); this only makes
+   * its effect observable.
+   */
+  nearMissRuns: { siblings: number; sampleLabel?: string }[]
 }
 
 /**
@@ -284,6 +297,10 @@ export function detectListRows(roots: readonly UiTreeNode[], options: DetectRows
   const minRepeatedRows = options.minRepeatedRows ?? MIN_REPEATED_ROWS
   const candidates: RowCandidate[] = []
   let nextGroup = 0
+  // Labelled sibling runs that are ONE SHORT of the threshold: they look like
+  // list items but are not reported as rows. Tracked so the tool can say so
+  // instead of silently returning a shorter list than the screen holds.
+  const nearMissRuns: { siblings: number; sampleLabel?: string }[] = []
   const visit = (node: UiTreeNode): void => {
     if (node.children.length >= minRepeatedRows) {
       for (const cluster of clusterSiblings(node.children, minRepeatedRows, options.bounds.height)) {
@@ -291,6 +308,17 @@ export function detectListRows(roots: readonly UiTreeNode[], options: DetectRows
         const group = nextGroup
         nextGroup += 1
         for (const member of cluster) candidates.push({ node: member, group })
+      }
+    }
+    // A near miss: at least two children, fewer than the threshold, at least
+    // one labelled -- so it LOOKS like a short list rather than scaffolding.
+    if (node.children.length >= minRepeatedRows - 1 && node.children.length < minRepeatedRows) {
+      const labelled = node.children.map(child => aggregateRowLabel(child)).filter(l => l !== undefined)
+      if (labelled.length > 0) {
+        nearMissRuns.push({
+          siblings: node.children.length,
+          ...(labelled[0] === undefined ? {} : { sampleLabel: labelled[0].slice(0, 40) }),
+        })
       }
     }
     for (const child of node.children) visit(child)
@@ -336,6 +364,7 @@ export function detectListRows(roots: readonly UiTreeNode[], options: DetectRows
     rows,
     repeatedGroups: new Set(rows.map(row => row.group)).size,
     omittedOffscreen,
+    nearMissRuns,
   }
 }
 

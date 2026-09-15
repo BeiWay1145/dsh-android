@@ -559,8 +559,28 @@ export async function captureWithExpectation(
 
 export interface AndroidUiTreeResult {
   device: AndroidDeviceInfo
-  /** Display size in pixels, taken from the hierarchy root bounds. */
+  /**
+   * The APP FRAME in pixels, taken from the hierarchy root bounds.
+   *
+   * THIS IS NOT THE SCREEN. uiautomator excludes the system bars, so the app
+   * frame is smaller than the display by their inset -- measured 1536x2524
+   * against a 1536x2560 display on a Xiaomi Pad 5. The name is kept for
+   * compatibility; `display` below carries the full size.
+   *
+   * Node `bounds` are in THIS space.
+   */
   screen: { width: number; height: number }
+  /**
+   * The FULL display in pixels (what `screencap` and OCR report).
+   *
+   * Present whenever it could be read. Differs from `screen` by the system-bar
+   * inset, so a caller normalizing node bounds by `screen` and then sending
+   * the result to `input tap` would be off by that inset -- the exact mistake
+   * that made every tap land up to 35 px low before it was fixed. The tools
+   * do this correctly themselves; this field is for callers doing their own
+   * arithmetic.
+   */
+  display?: { width: number; height: number }
   /** Number of nodes in the returned (possibly pruned) tree. */
   nodeCount: number
   /** True when the 40 KB cap pruned the deepest levels. */
@@ -641,11 +661,14 @@ export function buildTreeResult(
   screen: { width: number; height: number },
   device: AndroidDeviceInfo,
   args: { max_depth?: number; filter?: string; view?: UiTreeView },
+  display?: { width: number; height: number },
 ): AndroidUiTreeResult {
   // Additive and opt-in: the default stays full, so every existing caller,
   // fixture and expectation is unaffected.
-  if (args.view === 'actionable') return buildActionableResult(roots, screen, device, args)
-  return buildTreeResultBody(roots, screen, device, args)
+  const withDisplay = <T extends AndroidUiTreeResult>(result: T): T =>
+    display === undefined ? result : { ...result, display: { width: round2(display.width), height: round2(display.height) } }
+  if (args.view === 'actionable') return withDisplay(buildActionableResult(roots, screen, device, args))
+  return withDisplay(buildTreeResultBody(roots, screen, device, args))
 }
 
 /** The original full-tree body, split out so the actionable path can defer to it. */
@@ -1003,7 +1026,12 @@ export function createAndroidUiTools(host: AndroidToolHost, options: AndroidUiTo
       // Only worth recording when the caller may later ask if_moved; otherwise
       // this would add a ~150 ms fingerprint to every plain read.
       if (args.if_moved === true) await rememberTree(host, device.serial, shape, roots)
-      return buildTreeResult(roots, screenBoundsOf(roots), deviceSummaryOf(device), args)
+      // `screen` is the APP frame from the dump; `display` is the full panel.
+      // Both are reported because they differ by the system-bar inset and a
+      // caller doing its own coordinate math needs to know which is which.
+      // Best-effort: a host that cannot answer simply omits the field.
+      const display = await host.inputSpace(device.serial).catch(() => undefined)
+      return buildTreeResult(roots, screenBoundsOf(roots), deviceSummaryOf(device), args, display)
     },
     presentCall: (args: { serial?: string }) => ({
       card: 'generic',

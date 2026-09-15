@@ -204,6 +204,7 @@ export function createAndroidRowTools(host: AndroidToolHost, options: AndroidUiT
     rows: ListRow[]
     repeatedGroups: number
     omittedOffscreen: number
+    nearMissRuns: { siblings: number; sampleLabel?: string }[]
   }> => {
     let roots: UiTreeNode[]
     let rotation: number | undefined
@@ -271,6 +272,22 @@ export function createAndroidRowTools(host: AndroidToolHost, options: AndroidUiT
           + 'the remaining rows, or narrow the screen first.')
       }
       if (sample.rows.length === 0) hints.push(noRowsHint(sample.roots, sample.omittedOffscreen))
+      // A dropped row must be VISIBLE. The three-sibling rule is deliberate, but
+      // measured on a real Settings screen it silently omitted '更多设置' from a
+      // list of four titles -- with hint and omittedOffscreen both empty, so the
+      // caller could not tell a complete list from a short one.
+      else if (sample.nearMissRuns.length > 0) {
+        const total = sample.nearMissRuns.reduce((sum, run) => sum + run.siblings, 0)
+        const example = sample.nearMissRuns.find(run => run.sampleLabel !== undefined)?.sampleLabel
+        hints.push(
+          `${sample.nearMissRuns.length} labelled sibling run(s) (${total} node(s)) fell just short of the `
+          + '3-item threshold and are NOT in this row list'
+          + (example === undefined ? '' : `, including ${JSON.stringify(example)}`)
+          + '. They look like list items but repeat too few times to prove it — a two-item list and a '
+          + 'header pair are indistinguishable without a cell type. Read them from android_ui_tree and '
+          + 'tap with android_tap_element.',
+        )
+      }
       return {
         device: deviceSummaryOf(device),
         screen: sample.screen,

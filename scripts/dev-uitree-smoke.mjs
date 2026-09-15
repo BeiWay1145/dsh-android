@@ -452,6 +452,14 @@ if (lib !== undefined) {
       detected.rows.length === 3 && detected.omittedOffscreen === 2,
       `rows=${detected.rows.length} omitted=${detected.omittedOffscreen}`,
     )
+    // A dropped row must be OBSERVABLE. Measured on a real Settings screen the
+    // tree held four titles and the row list returned three, with hint and
+    // omittedOffscreen both empty -- a silent loss the caller could not see.
+    step(
+      'near-miss runs are reported, not silently dropped',
+      Array.isArray(detected.nearMissRuns),
+      `nearMissRuns=${JSON.stringify(detected.nearMissRuns)}`,
+    )
     const first = detected.rows[0]
     step(
       'row label aggregates the subtree text',
@@ -497,6 +505,35 @@ if (lib !== undefined) {
       () => requireCountKey(first, '转发'),
       /cannot verify a "转发" change.*never probed/s,
     )
+  }
+  {
+    // THE REPORTED CASE: a container with TWO labelled siblings. It looks like a
+    // short list, is deliberately NOT turned into rows (two labelled siblings
+    // cannot be told from a header pair), and must therefore be ANNOUNCED.
+    // Measured on a real Settings screen: four titles in the tree, three rows
+    // returned, hint AND omittedOffscreen both empty.
+    const twoSibling = parseUiTree(
+      '<?xml version="1.0" encoding="UTF-8" standalone="yes" ?><hierarchy rotation="0">'
+      + '<node index="0" text="" resource-id="" class="android.widget.FrameLayout" package="t"'
+      + ' bounds="[0,0][1080,2400]">'
+      + '<node index="0" text="" resource-id="t:id/box" class="android.widget.LinearLayout"'
+      + ' package="t" bounds="[0,0][1080,600]">'
+      + '<node index="0" text="更多设置" resource-id="t:id/title" class="android.widget.TextView"'
+      + ' package="t" bounds="[0,0][1080,300]" />'
+      + '<node index="1" text="高级设置" resource-id="t:id/title" class="android.widget.TextView"'
+      + ' package="t" bounds="[0,300][1080,600]" />'
+      + '</node></node></hierarchy>',
+    ).roots
+    const result = detectListRows(twoSibling, { bounds: screenBoundsOf(twoSibling) })
+    step('a 2-sibling labelled run is NOT reported as rows', result.rows.length === 0,
+      'the 3-item threshold is deliberate; two siblings are indistinguishable from a header pair')
+    step('but it IS reported as a near miss', result.nearMissRuns.length === 1,
+      JSON.stringify(result.nearMissRuns))
+    step('the near miss names the sibling count', result.nearMissRuns[0]?.siblings === 2,
+      String(result.nearMissRuns[0]?.siblings))
+    step('the near miss carries a sample label so the caller can act',
+      typeof result.nearMissRuns[0]?.sampleLabel === 'string' && result.nearMissRuns[0].sampleLabel !== '',
+      JSON.stringify(result.nearMissRuns[0]?.sampleLabel))
   }
   {
     const multipliers = parseCountsFromLabel('3.2W 赞 1.5万 收藏 2k views 1亿 播放')
