@@ -409,7 +409,12 @@ export interface UiTreeToolchain {
 export async function dumpUiTreeXml(
   toolchain: UiTreeToolchain,
   serial: string,
-  options: { timeoutMs?: number; signal?: AbortSignal } = {},
+  options: {
+    timeoutMs?: number
+    signal?: AbortSignal
+    /** Called once with the path that produced the XML, for diagnostics. */
+    onSource?: (source: UiTreeSource) => void
+  } = {},
 ): Promise<string> {
   const timeoutMs = options.timeoutMs ?? DUMP_TIMEOUT_MS
   const execOptions = { timeoutMs, maxBuffer: DUMP_MAX_BUFFER, ...(options.signal === undefined ? {} : { signal: options.signal }) }
@@ -430,8 +435,12 @@ export async function dumpUiTreeXml(
     const throughBridge = await toolchain.bridge
       .dump(serial, { timeoutMs, ...(options.signal === undefined ? {} : { signal: options.signal }) })
       .catch(() => undefined)
-    if (throughBridge !== undefined) return extractHierarchyXml(throughBridge)
+    if (throughBridge !== undefined) {
+      options.onSource?.('bridge')
+      return extractHierarchyXml(throughBridge)
+    }
   }
+  options.onSource?.('uiautomator')
 
   let primaryFailure: string | undefined
   // "could not get idle state" earns at most one retry after a short pause: a
@@ -528,6 +537,35 @@ export async function readUiTree(
   options: { timeoutMs?: number; signal?: AbortSignal } = {},
 ): Promise<ParsedUiTree> {
   return parseUiTree(await dumpUiTreeXml(toolchain, serial, options))
+}
+
+/**
+ * Which path produced a tree: the on-device bridge, or uiautomator.
+ *
+ * Reported because both are CORRECT and differ only in speed -- measured 71 ms
+ * against ~3500 ms. Nothing in a result used to distinguish them, so a session
+ * paying 50x could not notice, and a user asking "why is this slow" had no
+ * answer anywhere in the output.
+ */
+export type UiTreeSource = 'bridge' | 'uiautomator'
+
+/**
+ * {@link readUiTree} plus the source it came from.
+ *
+ * Kept as a separate entry point so no existing caller changes: the plain
+ * `readUiTree` still returns just the tree.
+ */
+export async function readUiTreeWithSource(
+  toolchain: UiTreeToolchain,
+  serial: string,
+  options: { timeoutMs?: number; signal?: AbortSignal } = {},
+): Promise<{ tree: ParsedUiTree; source: UiTreeSource }> {
+  let source: UiTreeSource = 'uiautomator'
+  const tree = parseUiTree(await dumpUiTreeXml(toolchain, serial, {
+    ...options,
+    onSource: (value) => { source = value },
+  }))
+  return { tree, source }
 }
 
 // ── tree shaping ─────────────────────────────────────────────────────────────

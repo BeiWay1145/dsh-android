@@ -20,9 +20,11 @@ coverage/
 # Local visual acceptance evidence may contain workspace or conversation data.
 artifacts/
 
-# Android bridge build outputs — regenerate with scripts/build-bridge*.ps1
+# Android bridge intermediates — regenerate with scripts/build-bridge*.ps1.
+# The FINAL apk is deliberately NOT ignored: it is the artifact a user must
+# install on their device, and a plugin that names a file the package does
+# not contain is worse than one that never mentions it.
 android-bridge/build/
-android-bridge/dsh-bridge.apk
 android-bridge/dsh-bridge.apk.idsig
 # Debug signing key: local only, never shipped or shared.
 android-bridge/debug.keystore

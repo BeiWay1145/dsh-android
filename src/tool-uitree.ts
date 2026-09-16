@@ -58,6 +58,7 @@ import {
   hasLabeledNode,
   nodeMatchesFilter,
   readUiTree,
+  readUiTreeWithSource,
   resolveTapTarget,
   screenBoundsOf,
   seekBarTapPoint,
@@ -590,6 +591,17 @@ export interface AndroidUiTreeResult {
   truncated?: boolean
   /** True when this result was served from the if_moved cache (no dump spent). */
   cached?: boolean
+  /**
+   * Which path produced this tree.
+   *
+   *   bridge       — the optional on-device service (milliseconds)
+   *   uiautomator  — the adb fallback (~3.5 s on the hardware measured)
+   *
+   * Both are correct; only the clock differs, by roughly 50x. Reported so that
+   * a session paying the slow path can SEE it and act — the bridge is one
+   * install away, and nothing used to say so here.
+   */
+  source?: 'bridge' | 'uiautomator'
   /** Guidance: why the read looks the way it does, and what to do next. */
   hint?: string
   /** Compact node tree (recursive; JSON-object typed for the canonical value). */
@@ -665,11 +677,16 @@ export function buildTreeResult(
   device: AndroidDeviceInfo,
   args: { max_depth?: number; filter?: string; view?: UiTreeView },
   display?: { width: number; height: number },
+  source?: 'bridge' | 'uiautomator',
 ): AndroidUiTreeResult {
   // Additive and opt-in: the default stays full, so every existing caller,
   // fixture and expectation is unaffected.
-  const withDisplay = <T extends AndroidUiTreeResult>(result: T): T =>
-    display === undefined ? result : { ...result, display: { width: round2(display.width), height: round2(display.height) } }
+  const withDisplay = <T extends AndroidUiTreeResult>(result: T): T => {
+    const withPanel = display === undefined
+      ? result
+      : { ...result, display: { width: round2(display.width), height: round2(display.height) } }
+    return source === undefined ? withPanel : { ...withPanel, source }
+  }
   if (args.view === 'actionable') return withDisplay(buildActionableResult(roots, screen, device, args))
   return withDisplay(buildTreeResultBody(roots, screen, device, args))
 }
@@ -1156,6 +1173,7 @@ export function createAndroidUiTools(host: AndroidToolHost, options: AndroidUiTo
           nodeCount: { type: 'integer', required: true },
           truncated: { type: 'boolean' },
           cached: { type: 'boolean' },
+          source: { type: 'string' },
           hint: { type: 'string' },
           tree: { type: 'array', required: true, items: treeNodeSchema },
         },
@@ -1174,8 +1192,14 @@ export function createAndroidUiTools(host: AndroidToolHost, options: AndroidUiTo
         if (hit !== undefined) return hit
       }
       let roots: UiTreeNode[]
+      let source: 'bridge' | 'uiautomator' = 'uiautomator'
       try {
-        roots = (await readUiTree(host.toolchain, device.serial)).roots
+        // readUiTreeWithSource reports WHICH path answered. Both are correct and
+        // differ by ~50x, so the caller should be able to see it rather than
+        // infer it from the clock.
+        const read = await readUiTreeWithSource(host.toolchain, device.serial)
+        roots = read.tree.roots
+        source = read.source
       } catch (error) {
         throw new Error(`android_ui_tree: ${errorMessage(error)}`)
       }
@@ -1187,7 +1211,7 @@ export function createAndroidUiTools(host: AndroidToolHost, options: AndroidUiTo
       // caller doing its own coordinate math needs to know which is which.
       // Best-effort: a host that cannot answer simply omits the field.
       const display = await host.inputSpace(device.serial).catch(() => undefined)
-      return buildTreeResult(roots, screenBoundsOf(roots), deviceSummaryOf(device), args, display)
+      return buildTreeResult(roots, screenBoundsOf(roots), deviceSummaryOf(device), args, display, source)
     },
     presentCall: (args: { serial?: string }) => ({
       card: 'generic',

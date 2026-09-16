@@ -45,6 +45,9 @@ export const BRIDGE_REQUEST_TIMEOUT_MS = 5_000
  */
 export const BRIDGE_NEGATIVE_TTL_MS = 60_000
 
+/** The accessibility service's package, used to tell 'absent' from 'disabled'. */
+export const BRIDGE_PACKAGE = 'com.beiway1145.dshbridge'
+
 /** One bridge reply. */
 interface BridgeReply {
   ok: boolean
@@ -193,6 +196,31 @@ export class BridgeClient {
     state.tree = reply.xml
     if (typeof reply.revision === 'number') state.revision = reply.revision
     return reply.xml
+  }
+
+
+  /**
+   * Whether the on-device service answers right now.
+   *
+   * Deliberately ONLY the socket question. Telling 'the APK is missing' from 'the
+   * service is not enabled' needs to read the device's package list, and this
+   * class takes a deliberately MINIMAL toolchain so tests can inject a fake --
+   * widening that seam to answer a diagnostic would be the tail wagging the dog.
+   * `AndroidHostController.bridgeStatus` owns the full three-way answer.
+   */
+  async answering(serial: string): Promise<boolean> {
+    return await this.ping(serial).catch(() => false)
+  }
+
+  /**
+   * Whether the service answers within a SHORT budget.
+   *
+   * Exists for diagnostics, which must never stall a caller for the ~10 s a cold
+   * forward handshake can take. A timeout here means "did not answer promptly",
+   * NOT "is broken" -- the caller decides what that implies.
+   */
+  async answeringWithin(serial: string, timeoutMs: number): Promise<boolean> {
+    return await this.ping(serial, { timeoutMs }).catch(() => false)
   }
 
   /** True when the service answers a ping. Diagnostics and tests only. */

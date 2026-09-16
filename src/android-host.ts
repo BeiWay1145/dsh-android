@@ -17,7 +17,7 @@
  */
 
 import { AdbError, AdbToolchain, type AndroidDevice } from './adb.js'
-import { BridgeClient } from './bridge-client.js'
+import { BridgeClient, BRIDGE_PACKAGE } from './bridge-client.js'
 import { AdbFrameLoop, type DeviceFrame } from './frame-source.js'
 
 const DEFAULT_IDLE_TIMEOUT_MS = 5 * 60 * 1000
@@ -28,6 +28,18 @@ const CONTROL_TIMEOUT_MS = 30_000
 
 /** Wait before re-reading once, when `screencap` returns an empty frame. */
 const SCREENCAP_RETRY_DELAY_MS = 250
+
+/**
+ * Ping budget for the bridge DIAGNOSTIC, deliberately far below the 5 s used
+ * for real requests.
+ *
+ * A cold forward handshake needs about 10 s, so the real budget has to be
+ * patient. A diagnostic must not be: it runs on the first call of a session,
+ * where 10 s of silence is the worst possible answer. Timing out here yields
+ * 'installed but not confirmed', which is true and useful, rather than blocking
+ * the caller to sharpen a detail nobody asked for.
+ */
+const BRIDGE_STATUS_PING_MS = 1_500
 /**
  * Settle time around each display-cycle key during recovery.
  *
@@ -507,6 +519,50 @@ export class AndroidHostController {
   }
 
 
+  /**
+   * Why the bridge is, or is not, serving reads — with the fix for each answer.
+   *
+   * Three states, because they need different actions and a caller cannot tell
+   * them apart from the clock:
+   *
+   *   active   — the service answers; reads take milliseconds
+   *   disabled — APK installed, accessibility service not enabled
+   *   absent   — the APK is not on the device
+   *
+   * WHY THIS EXISTS. Every bridge failure falls back to uiautomator silently and
+   * correctly, which is right for the CALL but leaves the caller unable to notice
+   * it is paying ~50x. Measured on real hardware: 71 ms with the bridge against
+   * ~3500 ms without. Nothing in any tool result distinguished the two, so a
+   * fresh session had no way to learn a faster path existed — reported by a user
+   * who could not tell that a device needed one install.
+   *
+   * Read-only: a socket ping plus a package query. No state is changed, and a
+   * probe that fails answers 'absent' rather than throwing, so a diagnostic can
+   * never take down the call that asked for it.
+   */
+  async bridgeStatus(serial: string): Promise<'active' | 'installed' | 'absent'> {
+    // The PACKAGE question first, and only it decides absent-vs-present: it is a
+    // read of a fact, it costs one bounded query, and it cannot be wrong.
+    //
+    // The socket is asked second and only ever UPGRADES the answer. The first
+    // version did the reverse -- ping first, and read a silent socket as
+    // 'installed but not enabled'. Measured on a real device that produced a
+    // confidently WRONG verdict: on the first call of a fresh session the
+    // forward handshake needs ~10 s while the ping budget is 5 s, so the probe
+    // timed out and reported a healthy bridge as 'disabled' -- while the forward
+    // it had just created was in fact working. A diagnostic that asserts a state
+    // it could not observe is worse than one that declines to.
+    const packages = await this.toolchain
+      .shell(serial, ['pm', 'list', 'packages', BRIDGE_PACKAGE], { timeoutMs: 10_000 })
+      .catch(() => '')
+    if (!packages.includes(BRIDGE_PACKAGE)) return 'absent'
+    // Installed. Whether it is serving RIGHT NOW is worth knowing, but only when
+    // the answer arrives promptly: a slow socket is not evidence of a disabled
+    // service, and a diagnostic must not stall the first call of a session.
+    const answering = await this.bridge.answeringWithin(serial, BRIDGE_STATUS_PING_MS)
+    return answering ? 'active' : 'installed'
+  }
+  
   /**
    * Whether the display is awake, or `undefined` when that cannot be told.
    *

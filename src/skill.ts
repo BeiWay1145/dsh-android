@@ -123,8 +123,32 @@ only reader on text-only routes or non-macOS hosts.
 ## Choosing the device
 
 \`android_devices\` lists everything adb can see, in ONE array — emulators and phones are the same kind of target here, and the SERIAL is the identity every tool takes. Omit \`device\` and the tools use the streamed device, else the only online one; with two or more attached, the serial is required (the error says so and lists them). \`avds\` names the emulators this machine can boot: pass one to \`android_boot\`, which launches it and waits (minutes on a cold start) before streaming.
-`
 
+## Read speed, and the optional on-device bridge
+
+- Every UI-tree read falls back to \`uiautomator\`, which is correct but costs roughly 3.5 s per call. An
+  optional accessibility service (the bridge) answers the same read in milliseconds. Measured on real
+  hardware: 71 ms with the bridge against ~3500 ms without, about 50x.
+- \`android_ui_tree\` reports which path answered, as \`source: bridge\` or \`source: uiautomator\`.
+  Look at it when a read feels slow -- nothing else distinguishes the two, because the fallback is
+  silent by design.
+- \`android_devices\` reports \`bridge\` per device: \`active\` (answering now), \`installed\`
+  (on the device but it did not answer promptly -- either the accessibility service is off, or the
+  first-call handshake has not finished), or \`absent\`.
+
+**If \`bridge\` is \`absent\`, do not silently accept the slow path.** Tell the user and offer the fix,
+which is one install:
+
+  \`android-bridge/dsh-bridge.apk\` ships INSIDE this plugin package. Push and install it, then enable the
+  service in Settings > Accessibility -- or via adb, APPENDING
+  \`com.beiway1145.dshbridge/com.beiway1145.dshbridge.BridgeService\` to the value of
+  \`settings get secure enabled_accessibility_services\` rather than replacing it, because the existing
+  entries belong to the user.
+
+**Never install it unasked.** It is an accessibility service, which is a real capability on someone's
+device; ask first and mention the speed-up, so the trade is visible. Nothing breaks without it -- every
+read still works, only slower.
+`
 /**
  * Register the playbook when the host provides the skill service.
  *

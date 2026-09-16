@@ -93,6 +93,19 @@ export interface AndroidDeviceListing extends AndroidDeviceInfo {
   avdName?: string
   /** True for the device the panel is currently streaming. */
   streaming?: boolean
+  /**
+   * Whether the optional on-device bridge is serving UI-tree reads.
+   *
+   *   active    — installed AND answering now; reads take milliseconds
+   *   installed — on the device but did not answer promptly: either its
+   *               accessibility service is off, or the first-call handshake is
+   *               still in flight. Reads fall back to uiautomator meanwhile.
+   *   absent    — not on the device at all
+   *
+   * Without a bridge every UI-tree read falls back to uiautomator, which is
+   * CORRECT but about 50x slower, and nothing else in any result says so.
+   */
+  bridge?: 'active' | 'installed' | 'absent'
 }
 
 export interface AndroidDevicesResult {
@@ -198,6 +211,7 @@ export function createAndroidTools(host: AndroidHostController, options: Android
                 // Closed schema: an undeclared field rejects the whole result.
                 board: { type: 'string' },
                 productDevice: { type: 'string' },
+                bridge: { type: 'string' },
                 streaming: { type: 'boolean' },
               },
             },
@@ -233,6 +247,13 @@ export function createAndroidTools(host: AndroidHostController, options: Android
         const details = device.state === 'device'
           ? await host.toolchain.deviceDetails(device).catch(() => undefined)
           : undefined
+        // Only an ONLINE device can answer; probing an offline one would just
+        // burn a timeout. This is the first call of every session, so it is the
+        // one place a caller can learn BEFORE acting that a device is running
+        // ~50x slower than it could (measured: 71 ms against ~3500 ms).
+        const bridge = device.state === 'device'
+          ? await host.bridgeStatus(device.serial).catch(() => undefined)
+          : undefined
         devices.push({
           ...deviceSummary(device, details),
           kind: device.emulator ? 'emulator' : 'physical',
@@ -240,6 +261,7 @@ export function createAndroidTools(host: AndroidHostController, options: Android
           ...(device.product === undefined ? {} : { product: device.product }),
           ...(details?.sdk === undefined ? {} : { sdk: details.sdk }),
           ...(details?.avdName === undefined ? {} : { avdName: details.avdName }),
+          ...(bridge === undefined ? {} : { bridge }),
           ...(details?.board === undefined ? {} : { board: details.board }),
           ...(details?.productDevice === undefined ? {} : { productDevice: details.productDevice }),
           ...(device.serial === streamed ? { streaming: true } : {}),
