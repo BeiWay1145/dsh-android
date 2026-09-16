@@ -45,6 +45,30 @@ export const BRIDGE_REQUEST_TIMEOUT_MS = 5_000
  */
 export const BRIDGE_NEGATIVE_TTL_MS = 60_000
 
+/**
+ * How long a failure is trusted when the bridge is KNOWN to be installed.
+ *
+ * Deliberately far shorter than {@link BRIDGE_NEGATIVE_TTL_MS}, because the
+ * two cover different situations:
+ *
+ *   not installed        -- a lasting fact; re-probing every dump just pays an
+ *                           `adb forward` round trip for nothing.
+ *   installed but silent -- usually TRANSIENT. Reported from a real session:
+ *                           ColorOS reclaimed the accessibility service in the
+ *                           background (PID 20825 -> 23523) and the socket
+ *                           showed leaving connections. The service rebinds
+ *                           itself in seconds, but the old single 60 s penalty
+ *                           kept the plugin on the slow path for a full minute
+ *                           AFTER the device had recovered -- and because the
+ *                           fallback is silent, the only symptom was 'it got
+ *                           slow again'.
+ *
+ * 2 s is long enough to avoid hammering a genuinely dead socket on every call
+ * and short enough that a recovered service is picked back up while the caller
+ * is still on the same task.
+ */
+export const BRIDGE_TRANSIENT_TTL_MS = 2_000
+
 /** The accessibility service's package, used to tell 'absent' from 'disabled'. */
 export const BRIDGE_PACKAGE = 'com.beiway1145.dshbridge'
 
@@ -168,13 +192,20 @@ export class BridgeClient {
         try {
           reply = await this.#request(state.port, request, timeoutMs, options.signal)
         } catch {
-          await this.#drop(serial, state)
+          // Two attempts through a FRESH forward both failed, but the forward was
+          // just created -- so this says nothing about whether the APK is
+          // installed, only that the socket is not answering yet. Treat it as
+          // transient, exactly like the stale-forward branch below.
+          await this.#drop(serial, state, 'transient')
           return undefined
         }
       } else {
-        // The forward may be stale (adb restarted, service toggled). Drop it so
-        // the next call re-establishes, and let the caller fall back this time.
-        await this.#drop(serial, state)
+        // The forward may be stale (adb restarted, service toggled, or the
+        // accessibility service was reclaimed and is rebinding). Drop it so the
+        // next call re-establishes, and let the caller fall back this time --
+        // but do NOT punish it with the long TTL: this exact case is how a
+        // background kill turned into a silent minute of slowness.
+        await this.#drop(serial, state, 'transient')
         return undefined
       }
     }
@@ -240,7 +271,9 @@ export class BridgeClient {
       )
       return reply.ok === true && reply.pong === true
     } catch {
-      await this.#drop(serial, state)
+      // 'Did not answer just now' is not 'not installed'. Keep the penalty short
+      // so a service that is rebinding is picked back up promptly.
+      await this.#drop(serial, state, 'transient')
       return false
     }
   }
@@ -253,11 +286,14 @@ export class BridgeClient {
     return fresh
   }
 
-  async #drop(serial: string, state: BridgeState): Promise<void> {
+  async #drop(serial: string, state: BridgeState, kind: 'transient' | 'absent' = 'absent'): Promise<void> {
     const port = state.port
     state.port = undefined
     state.healthy = false
-    state.retryAfter = Date.now() + BRIDGE_NEGATIVE_TTL_MS
+    // A KNOWN-INSTALLED service that went quiet is usually restarting, so it is
+    // retried soon; an absent one is not retried often, because re-probing a
+    // device that cannot answer only pays for an `adb forward` round trip.
+    state.retryAfter = Date.now() + (kind === 'transient' ? BRIDGE_TRANSIENT_TTL_MS : BRIDGE_NEGATIVE_TTL_MS)
     if (port !== undefined && this.#toolchain.unforward !== undefined) {
       await this.#toolchain.unforward(serial, port).catch(() => {})
     }
@@ -280,7 +316,9 @@ export class BridgeClient {
       }
       const port = await this.#toolchain.forward(serial, `localabstract:${BRIDGE_SOCKET_NAME}`)
       if (!Number.isInteger(port) || port <= 0) {
-        state.retryAfter = Date.now() + BRIDGE_NEGATIVE_TTL_MS
+        // `adb forward` failing is about the transport, not the package: the APK
+        // may be perfectly installed while adb itself is mid-restart. Retry soon.
+        state.retryAfter = Date.now() + BRIDGE_TRANSIENT_TTL_MS
         return undefined
       }
       // WARM-UP, and it must SUCCEED. `adb forward` establishes the device-side
