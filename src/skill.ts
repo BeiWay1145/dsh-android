@@ -132,6 +132,11 @@ only reader on text-only routes or non-macOS hosts.
 - \`android_ui_tree\` reports which path answered, as \`source: bridge\` or \`source: uiautomator\`.
   Look at it when a read feels slow -- nothing else distinguishes the two, because the fallback is
   silent by design.
+- **A first call can take ~5 s and that is adb, not this plugin.** Measured: bringing the adb
+  SERVER up costs 5,173 ms, while the work itself (\`adb forward\`) costs 111 ms. With the server
+  already running the same cold start is ~130 ms. It happens once after the server dies -- for
+  example when the shell session that owned it exits. Do not diagnose it as a bridge or device
+  fault, and do not retry the tool; the next call is fast.
 - \`android_devices\` reports \`bridge\` per device: \`active\` (answering now), \`installed\`
   (on the device but it did not answer promptly -- either the accessibility service is off, or the
   first-call handshake has not finished), or \`absent\`.
