@@ -28,6 +28,7 @@ import { createAndroidRowTools, ANDROID_ROW_TOOL_NAMES } from './tool-list-rows.
 import { createAndroidVisionQueryTools, ANDROID_VISION_QUERY_TOOL_NAMES } from './tool-vision-query.js'
 import { createAndroidLogTools } from './tool-logs.js'
 import { createAndroidDebugTools, ANDROID_DEBUG_TOOL_NAMES } from './tool-debug.js'
+import { createAndroidVerifyTools, ANDROID_VERIFY_TOOL_NAMES } from './verify.js'
 import { registerAndroidSkill } from './skill.js'
 import { installStreamRoutes } from './stream-routes.js'
 
@@ -270,6 +271,8 @@ export function apply(ctx: Context): () => Promise<void> {
   // Debugging & memory diagnostics: created once so the same disposer can
   // stop new calls from starting while the plugin tears down.
   const debugTools = createAndroidDebugTools(host)
+  // Deterministic state verification: reads raw system state, judges in code.
+  const verifyTools = createAndroidVerifyTools(host)
   // Keep the frame loop alive across crashes; an intentional stop (or the
   // idle timeout) is never fought.
   host.startKeepAlive()
@@ -293,6 +296,7 @@ export function apply(ctx: Context): () => Promise<void> {
   disposers.push(ctx.effect(() => hostCtx.tools.register(rowTools.androidTapRow), 'dsh-android:android_tap_row'))
   disposers.push(ctx.effect(() => hostCtx.tools.register(visionQueryTools.androidQuery), 'dsh-android:android_query'))
   disposers.push(ctx.effect(() => hostCtx.tools.register(visionQueryTools.androidAssert), 'dsh-android:android_assert'))
+  disposers.push(ctx.effect(() => hostCtx.tools.register(verifyTools.androidVerify), 'dsh-android:android_verify'))
   // The OCR trio registers as ONE effect: they share a backend, and a partial
   // registration (dsh-ios shipped one for a while) advertises a verb in the
   // playbook that has no implementation behind it.
@@ -330,7 +334,7 @@ export function apply(ctx: Context): () => Promise<void> {
     `dsh-android mounted (${ANDROID_TOOL_NAMES.join(' + ')} + ${ANDROID_UI_TOOL_NAMES.join(' + ')} + `
     + `${ANDROID_ROW_TOOL_NAMES.join(' + ')} + ${ANDROID_VISION_QUERY_TOOL_NAMES.join(' + ')} + `
     + `${ANDROID_OCR_TOOL_NAMES.join(' + ')} + android_logs + `
-    + `${ANDROID_DEBUG_TOOL_NAMES.join(' + ')}; adb: `
+    + `${ANDROID_VERIFY_TOOL_NAMES.join(' + ')} + ${ANDROID_DEBUG_TOOL_NAMES.join(' + ')}; adb: `
     + `${adb.available ? `${adb.command ?? 'adb'} (${adb.source})` : `unavailable — ${adb.reason ?? '?'}`})`,
   )
   return async () => {

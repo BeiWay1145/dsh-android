@@ -110,9 +110,17 @@ async function captureForReading(
   exec: VisionExecLike,
 ): Promise<AndroidScreenshotResult> {
   if (vision === undefined || vision.attachments === undefined) {
+    // Point at the tool that fits the QUESTION, not merely at anything text-based.
+    // Most assertions are about state the system records, and android_ui_tree cannot
+    // answer those -- it reports structure, not whether a switch is on.
     throw new Error(
-      `${tool}: no attachment store is mounted on this host, so a screenshot cannot be delivered to the `
-      + 'model. Use android_ui_tree / android_ui_rows (pure text) instead.',
+      `${tool}: no attachment store is mounted on this host, so a screenshot cannot be delivered to `
+      + 'the model, and this tool judges a claim from a picture. Two ways forward. Use android_verify '
+      + 'if the claim is about recorded STATE (a setting, the wifi switch, whether the screen is awake, '
+      + 'which app has focus, whether a package is installed, a system property, a running process) -- '
+      + 'it reads raw system state in code, needs no image, and costs a fraction of this call. Use '
+      + 'android_ui_tree / android_ui_rows only when the claim is about STRUCTURE (which nodes exist, '
+      + 'what a list holds). Neither can judge APPEARANCE, which is the one thing a screenshot is for.',
     )
   }
   if (!await imageInputActive(vision, exec)) throw new Error(textOnlyRemedy(tool, device.serial))
