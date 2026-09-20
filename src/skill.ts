@@ -168,6 +168,33 @@ several times a minute — and may kill the app outright. Two consequences worth
 
 Do not silently accept the slow path here. Unlike a missing APK, this one is a device state the
 user asked for and can restore in about ten seconds.
+
+### A sleeping screen makes the bridge look dead (read this before diagnosing)
+
+On some ROMs (measured: HarmonyOS 3.0 on a nova 4) a screen that has gone to sleep FREEZES the app
+process. The bridge then fails in the most misleading way possible:
+
+- the process is still alive and \`pidof\` returns its pid,
+- the listening socket is still listed in \`/proc/net/unix\` as \`00010000\` (LISTEN),
+- \`adb forward\` still succeeds, and a TCP connect still completes in about 1 ms,
+- the request is simply never answered, because the process is not being scheduled.
+
+So the symptom is **connection establishes, then silence** — not a refusal. If you diagnose by
+connecting, you will conclude the bridge is broken when it is merely asleep.
+
+**Before blaming the bridge, check the screen:**
+
+    adb shell dumpsys power | grep mWakefulness=
+
+\`Asleep\` explains it. Wake the device and re-probe:
+
+    adb shell input keyevent KEYCODE_WAKEUP
+    adb shell svc power stayon true     # keep it awake while you measure
+
+**Never conclude "the bridge is dead" from a single unanswered probe while the screen is off.** And
+when you MEASURE bridge latency on a physical device, keep the screen awake for the whole run —
+otherwise the numbers are a measurement of Doze, not of the bridge. Every recovery figure in this
+plugin's history was taken with the screen on.
 **Never install it unasked.** It is an accessibility service, which is a real capability on someone's
 device; ask first and mention the speed-up, so the trade is visible. Nothing breaks without it -- every
 read still works, only slower.
