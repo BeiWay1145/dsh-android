@@ -540,7 +540,7 @@ export class AndroidHostController {
    * probe that fails answers 'absent' rather than throwing, so a diagnostic can
    * never take down the call that asked for it.
    */
-  async bridgeStatus(serial: string): Promise<'active' | 'installed' | 'absent'> {
+  async bridgeStatus(serial: string): Promise<'active' | 'installed' | 'not-running' | 'absent'> {
     // The PACKAGE question first, and only it decides absent-vs-present: it is a
     // read of a fact, it costs one bounded query, and it cannot be wrong.
     //
@@ -560,7 +560,20 @@ export class AndroidHostController {
     // the answer arrives promptly: a slow socket is not evidence of a disabled
     // service, and a diagnostic must not stall the first call of a session.
     const answering = await this.bridge.answeringWithin(serial, BRIDGE_STATUS_PING_MS)
-    return answering ? 'active' : 'installed'
+    if (answering) return 'active'
+    // Silence with the package present has two very different causes, and only
+    // one of them fixes itself. Measured on HarmonyOS: after the system killed
+    // the APK process, the accessibility service did NOT come back -- 27 probes
+    // over 60 s, no process and no socket -- and the only symptom was a
+    // permanent drift back to uiautomator. A user cannot be expected to guess
+    // that from 'it feels slow again', so the two are separated here.
+    const enabled = await this.toolchain
+      .shell(serial, ['settings', 'get', 'secure', 'enabled_accessibility_services'], { timeoutMs: 10_000 })
+      .catch(() => '')
+    // Still listed but not answering means the PROCESS is gone: the service is
+    // switched on in Settings and simply is not running. That is the state a
+    // user must fix by hand, and the one worth naming.
+    return enabled.includes(BRIDGE_PACKAGE) ? 'not-running' : 'installed'
   }
   
   /**

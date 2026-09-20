@@ -36,6 +36,20 @@ export const BRIDGE_PROTOCOL_VERSION = '1'
 export const BRIDGE_REQUEST_TIMEOUT_MS = 5_000
 
 /**
+ * Budget for the connect-time PROBE, kept far below the request budget.
+ *
+ * The probe answers one question -- is the service actually serving, or merely
+ * bound? -- and a hung bridge cannot answer it any faster than a timeout. At
+ * 5 s the answer cost 10 s per call (two warm-up attempts) before any fallback
+ * work started. Measured on a HarmonyOS device, the rebind window is a few
+ * seconds at most, so a probe shorter than the window it is waiting out would
+ * be counterproductive: 1.2 s is long enough for a healthy service (which
+ * answers in single-digit milliseconds) and short enough that a hang costs
+ * about a second instead of ten.
+ */
+export const BRIDGE_PROBE_TIMEOUT_MS = 1_200
+
+/**
  * How long a NEGATIVE probe result is trusted before re-probing.
  *
  * Probing costs an `adb forward` round trip, so an uninstalled bridge must not
@@ -335,19 +349,31 @@ export class BridgeClient {
       //
       // Retrying the warm-up instead turns that into one retry here, after
       // which the forward is genuinely usable.
+      // A PROBE budget, not the request budget. This is the whole point: when the
+      // service is HUNG -- connected, accepted by nobody -- there is no fast
+      // failure to observe. adb forward does not reset the connection when the
+      // target socket is absent (measured: TCP connects in 4 ms and then stays
+      // silent forever), so the ONLY signal is the timeout. Spending the full 5 s
+      // twice here meant one tool call burned 10 s before it even began its
+      // fallback, and the user experienced it as 'the fast path randomly is not'.
+      const probe = Math.min(BRIDGE_PROBE_TIMEOUT_MS, BRIDGE_REQUEST_TIMEOUT_MS)
       for (let attempt = 0; attempt < 2; attempt += 1) {
-        const warmed = await this.#request(port, { id: 0, cmd: 'ping' }, BRIDGE_REQUEST_TIMEOUT_MS)
+        const warmed = await this.#request(port, { id: 0, cmd: 'ping' }, probe)
           .then(reply => reply.ok === true)
           .catch(() => false)
         if (warmed) return port
       }
       // Never warm after two tries: give up on this forward and let the caller
-      // fall back, rather than making it wait again.
+      // fall back, rather than making it wait again. The name is still held by the
+      // hung instance, so this counts as TRANSIENT -- it is worth retrying soon,
+      // because a rebind releases it within a second or so.
       await this.#toolchain.unforward?.(serial, port).catch(() => {})
-      state.retryAfter = Date.now() + BRIDGE_NEGATIVE_TTL_MS
+      state.retryAfter = Date.now() + BRIDGE_TRANSIENT_TTL_MS
       return undefined
     } catch {
-      state.retryAfter = Date.now() + BRIDGE_NEGATIVE_TTL_MS
+      // Same reasoning as the failed probe above: an exception here is about the
+      // transport or a rebinding service, not about whether the APK is present.
+      state.retryAfter = Date.now() + BRIDGE_TRANSIENT_TTL_MS
       return undefined
     }
   }

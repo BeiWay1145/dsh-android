@@ -43,7 +43,69 @@ final class SocketServer {
     private final AtomicInteger seq = new AtomicInteger();
     private volatile boolean running = true;
     private Thread acceptThread;
-    private LocalServerSocket serverSocket;
+    /**
+     * The listening socket. VOLATILE because two threads touch it: the accept
+     * loop publishes it after bind and clears it on teardown, while a rebind
+     * arrives on the service thread and closes it from under the loop.
+     *
+     * Measured failure without this: on HarmonyOS every accessibility rebind
+     * calls stop() then start(), and the new instance hit
+     * 'bind dsh_bridge failed: Address already in use' on EVERY attempt -- the
+     * old socket had not been released, because the close() raced the loop's
+     * own write of the same field and could miss.
+     */
+    private volatile LocalServerSocket serverSocket;
+    /**
+     * Serializes one request at a time.
+     *
+     * The accept loop hands a connection to a worker instead of serving it
+     * inline, so a client that holds a connection open can no longer stop the
+     * loop from accepting the next one. Measurements that motivated this: a
+     * client that timed out and destroyed its socket left the device-side
+     * readLine() blocked, the accept loop parked inside that connection, and
+     * every later request HUNG -- connecting fine, never answered. The plugin
+     * then had to wait out a full timeout on every call.
+     */
+    private final java.util.concurrent.Semaphore acceptGate = new java.util.concurrent.Semaphore(1);
+    /**
+     * Connections currently being served, so stop() can close them.
+     *
+     * `readLine()` blocks until data arrives or the peer closes; setting a flag
+     * cannot wake it. Closing the socket does. Without this, stop() returned
+     * while a worker was still parked mid-read holding the name, and the next
+     * bind failed with 'Address already in use'.
+     */
+    private final java.util.Set<LocalSocket> live =
+            java.util.Collections.newSetFromMap(new java.util.concurrent.ConcurrentHashMap<>());
+    /**
+     * Serializes teardown-and-rebind ACROSS SocketServer instances.
+     *
+     * `onUnbind` and `onServiceConnected` arrive on DIFFERENT threads on
+     * HarmonyOS and are not ordered: measured, `connected` fired 3 ms after the
+     * previous instance's bind had already failed, while its `unbound` was still
+     * 800 ms in the FUTURE. So a new instance could bind while the old one still
+     * held the name.
+     *
+     * A per-instance lock cannot fix that -- the two instances are different
+     * objects. This one is static, so a rebind waits for the previous teardown
+     * to finish before it tries the name.
+     */
+    private static final Object REBIND_LOCK = new Object();
+    /**
+     * The LISTEN socket of the instance that currently owns the name.
+     *
+     * STATIC on purpose. Measured on HarmonyOS: removing the service from
+     * `enabled_accessibility_services` does NOT call onUnbind, so the previous
+     * instance keeps its listener and its accept loop — `/proc/net/unix` shows
+     * LISTEN=1 with an unchanged PID throughout. The next instance therefore
+     * always lost the race for the name, and every rebind logged
+     * 'Address already in use' before eventually winning by luck.
+     *
+     * A new instance can reach the old one only through a static, so it does:
+     * before binding, it closes whatever listener is recorded here. That turns
+     * a race into a handover.
+     */
+    private static volatile SocketServer owner;
 
     SocketServer(BridgeService service) {
         this.service = service;
@@ -55,13 +117,134 @@ final class SocketServer {
         acceptThread.start();
     }
 
+    /**
+     * Bind while holding the cross-instance lock, so a concurrent teardown cannot
+     * be mid-close when the name is taken.
+     *
+     * Returns true when the socket was bound (or another instance won the race and
+     * this one should give up).
+     */
+    boolean bindLocked() {
+        synchronized (REBIND_LOCK) {
+            if (!running) return false;
+            try {
+                LocalServerSocket s = new LocalServerSocket(SOCKET_NAME);
+                serverSocket = s;
+                owner = this;
+                Log.i(TAG, "listening on localabstract:" + SOCKET_NAME);
+                return true;
+            } catch (Throwable first) {
+                // The name is taken. On this platform that is usually OUR OWN
+                // previous instance, still alive because the system never told it
+                // to stop. Take the name back from it rather than waiting for a
+                // teardown that is not coming.
+                SocketServer previous = owner;
+                if (previous != null && previous != this) {
+                    previous.releaseForHandover();
+                    try {
+                        LocalServerSocket s = new LocalServerSocket(SOCKET_NAME);
+                        serverSocket = s;
+                        owner = this;
+                        Log.i(TAG, "listening on localabstract:" + SOCKET_NAME + " (handover)");
+                        return true;
+                    } catch (Throwable ignored) {
+                        // Fall through: the caller backs off and retries.
+                    }
+                }
+                // Nobody owns the name, yet the bind still failed: the previous
+                // listener is a DYING socket whose close() has returned but whose
+                // abstract name the kernel has not released yet. Measured on
+                // HarmonyOS: unbound at 45.375, connected at 46.112, first bind
+                // failing at 46.114 and succeeding at 46.366 -- a fixed 252 ms,
+                // which is exactly the accept loop backoff. The release is
+                // asynchronous, so a short bounded re-probe beats paying that
+                // backoff in full.
+                for (int i = 0; i < 6; i++) {
+                    sleepQuietly(40L);
+                    if (!running) return false;
+                    try {
+                        LocalServerSocket s = new LocalServerSocket(SOCKET_NAME);
+                        serverSocket = s;
+                        owner = this;
+                        Log.i(TAG, "listening on localabstract:" + SOCKET_NAME
+                                + " (released after " + (i + 1) * 40 + "ms)");
+                        return true;
+                    } catch (Throwable ignored) {
+                        // Still held; keep probing.
+                    }
+                }
+                return false;
+            }
+        }
+    }
+
+    /**
+     * Give up the listener to a replacement instance.
+     *
+     * Stops the loop and closes the socket, but leaves the object usable if the
+     * handover fails and its own loop decides to retry.
+     */
+    private void releaseForHandover() {
+        LocalServerSocket s = serverSocket;
+        serverSocket = null;
+        if (s != null) {
+            try {
+                s.close();
+            } catch (Throwable ignored) {
+            }
+        }
+    }
+
+    /**
+     * Stop the loop and RELEASE the abstract name before returning.
+     *
+     * Releasing matters more than stopping. A rebind calls stop() and then
+     * start() immediately; if the name is still held at that moment, the new
+     * bind fails with 'Address already in use' and the connection is accepted
+     * by nobody -- a HANG rather than an error. Measured on HarmonyOS: 4.0 s
+     * lost on one rebind, 11.0 s across five.
+     *
+     * The close is done through a LOCAL reference after clearing the field, so
+     * the accept loop's own cleanup cannot race this one into closing nothing.
+     */
     void stop() {
         running = false;
-        try {
-            if (serverSocket != null) serverSocket.close();
-        } catch (Throwable ignored) {
-        }
+        // Give up ownership BEFORE closing, so a replacement instance that finds
+        // the name still held does not waste its handover attempt on an object
+        // that is already torn down -- and, more importantly, so it can tell
+        // "no owner: the name is held by a dying socket" from "owner alive: the
+        // name is genuinely still in use".
+        if (owner == this) owner = null;
+        LocalServerSocket s = serverSocket;
         serverSocket = null;
+        if (s != null) {
+            try {
+                s.close();
+            } catch (Throwable ignored) {
+            }
+        }
+        // Wake any worker parked in readLine(). Closing its socket makes the read
+        // return, so the worker reaches its finally and releases the name.
+        for (LocalSocket open : live) {
+            try {
+                open.close();
+            } catch (Throwable ignored) {
+            }
+        }
+        live.clear();
+        // Wait for the loop to leave accept(), so the caller knows the name is
+        // free before it binds again. Bounded: a stuck accept() must not hang
+        // the service thread, and the loop closes the socket itself when it
+        // wakes.
+        Thread t = acceptThread;
+        acceptThread = null;
+        if (t != null && t != Thread.currentThread()) {
+            try {
+                t.join(500);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            }
+        }
     }
 
     private void acceptLoop() {
@@ -73,30 +256,63 @@ final class SocketServer {
         // accessibility-service toggle).
         int attempt = 0;
         while (running) {
+            LocalServerSocket listening;
             try {
-                serverSocket = new LocalServerSocket(SOCKET_NAME);
+                // Bound under the cross-instance lock: a concurrent teardown from a
+                // previous instance must not be mid-close while we take the name.
+                if (!bindLocked()) {
+                    throw new java.io.IOException("Address already in use (or stopped)");
+                }
+                listening = serverSocket;
                 attempt = 0;
-                Log.i(TAG, "listening on localabstract:" + SOCKET_NAME);
             } catch (Throwable t) {
                 attempt++;
                 Log.e(TAG, "bind " + SOCKET_NAME + " failed (attempt " + attempt + "): " + t);
-                sleepQuietly(Math.min(2000L * attempt, 10000L));
+                // 'Address already in use' is a SHORT race with the previous
+                // instance's teardown, not a lasting condition. The old backoff
+                // started at 2 s and grew, which turned a sub-second race into
+                // seconds of downtime: measured 11.0 s of unavailability across
+                // five rebinds. Retry quickly at first, and only back off if the
+                // name really is held by something else.
+                sleepQuietly(Math.min(250L * attempt, 2000L));
                 continue;
             }
             try {
                 while (running) {
-                    LocalSocket client = serverSocket.accept();
-                    serve(client);
+                    LocalSocket client = listening.accept();
+                    // Serve on a WORKER, never inline. A client that connects and
+                    // then stalls (or times out and destroys its socket) leaves
+                    // readLine() blocked; serving inline parked this loop inside
+                    // that connection so every later request hung unanswered.
+                    // The gate keeps one request in flight at a time, which is
+                    // what the accessibility reads want.
+                    Thread worker = new Thread(() -> {
+                        try {
+                            acceptGate.acquire();
+                            try {
+                                serve(client);
+                            } finally {
+                                acceptGate.release();
+                            }
+                        } catch (InterruptedException e) {
+                            Thread.currentThread().interrupt();
+                        }
+                    }, "dsh-bridge-serve");
+                    worker.setDaemon(true);
+                    worker.start();
                 }
             } catch (Throwable t) {
                 if (!running) break;
                 Log.w(TAG, "accept loop interrupted, rebinding: " + t);
             } finally {
+                // Close through the LOCAL reference and clear the field only if it
+                // is still ours -- two writers of this field was the race that let
+                // a close() land on nothing and leak the abstract name.
                 try {
-                    if (serverSocket != null) serverSocket.close();
+                    listening.close();
                 } catch (Throwable ignored) {
                 }
-                serverSocket = null;
+                if (serverSocket == listening) serverSocket = null;
             }
             if (running) sleepQuietly(250L);
         }
@@ -111,8 +327,19 @@ final class SocketServer {
         }
     }
 
-    /** Serve one connection until the peer disconnects. */
+    /**
+     * Serve one connection until the peer disconnects, then ALWAYS close it.
+     *
+     * Closing is not tidiness -- it is what frees the abstract name. Measured on
+     * a HarmonyOS device: without this, clients that timed out and went away left
+     * their LocalSocket open, and /proc/net/unix accumulated them (1 LISTEN plus
+     * 21 established-but-dead after a few rebinds). The next `new
+     * LocalServerSocket(SOCKET_NAME)` then failed with 'Address already in use'
+     * even though our own stop() had closed the listener, because the name was
+     * still held by those orphaned connections.
+     */
     private void serve(LocalSocket client) {
+        live.add(client);
         try {
             BufferedReader in = new BufferedReader(
                     new InputStreamReader(client.getInputStream(), StandardCharsets.UTF_8));
@@ -126,7 +353,16 @@ final class SocketServer {
                 out.flush();
             }
         } catch (Throwable t) {
-            Log.w(TAG, "connection ended: " + t);
+            // A client that vanished mid-read is the normal end of a short-lived
+            // connection, not an error worth a stack trace.
+            Log.d(TAG, "connection ended: " + t);
+        } finally {
+            live.remove(client);
+            // THE IMPORTANT LINE. See the method comment.
+            try {
+                client.close();
+            } catch (Throwable ignored) {
+            }
         }
     }
 
@@ -290,11 +526,4 @@ final class SocketServer {
         return sb.toString();
     }
 
-    private static void closeQuietly(LocalSocket s) {
-        if (s == null) return;
-        try {
-            s.close();
-        } catch (Throwable ignored) {
-        }
-    }
 }

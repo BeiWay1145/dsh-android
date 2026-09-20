@@ -150,6 +150,24 @@ which is one install:
   \`settings get secure enabled_accessibility_services\` rather than replacing it, because the existing
   entries belong to the user.
 
+### When the bridge keeps dying (aggressive ROMs)
+
+Some ROMs unbind and rebind third-party accessibility services constantly — HarmonyOS does this
+several times a minute — and may kill the app outright. Two consequences worth knowing:
+
+- A rebind briefly holds the socket name, so the bridge can be unavailable for a second or two.
+  This fixes itself; do not reinstall or re-enable anything.
+- \`bridge: "not-running"\` is DIFFERENT: the service is enabled but its process is gone, and it does
+  NOT come back on its own (measured: 60 s, 27 probes, no recovery). Reads silently fall back to
+  uiautomator and every UI-tree call costs seconds instead of milliseconds.
+
+**When \`android_devices\` reports \`not-running\`, tell the user** — it needs a manual step:
+
+  设置 > 无障碍 > DSH Bridge，关掉再打开（或把它重新追加到 enabled_accessibility_services）。
+  在激进省电的 ROM 上，还要把该应用排除出电池优化，否则会被再次杀掉。
+
+Do not silently accept the slow path here. Unlike a missing APK, this one is a device state the
+user asked for and can restore in about ten seconds.
 **Never install it unasked.** It is an accessibility service, which is a real capability on someone's
 device; ask first and mention the speed-up, so the trade is visible. Nothing breaks without it -- every
 read still works, only slower.

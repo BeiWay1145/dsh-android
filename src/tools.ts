@@ -96,16 +96,20 @@ export interface AndroidDeviceListing extends AndroidDeviceInfo {
   /**
    * Whether the optional on-device bridge is serving UI-tree reads.
    *
-   *   active    — installed AND answering now; reads take milliseconds
-   *   installed — on the device but did not answer promptly: either its
-   *               accessibility service is off, or the first-call handshake is
-   *               still in flight. Reads fall back to uiautomator meanwhile.
-   *   absent    — not on the device at all
+   *   active      — installed AND answering now; reads take milliseconds
+   *   installed   — on the device, but its accessibility service is not enabled
+   *                 (or the first-call handshake is still in flight). Reads fall
+   *                 back to uiautomator meanwhile.
+   *   not-running — enabled in Settings, yet nothing is answering. Measured on
+   *                 HarmonyOS after the system killed the APK process: the
+   *                 service does NOT restart by itself, so this does not fix
+   *                 itself and the user has to re-enable it.
+   *   absent      — not on the device at all
    *
    * Without a bridge every UI-tree read falls back to uiautomator, which is
    * CORRECT but about 50x slower, and nothing else in any result says so.
    */
-  bridge?: 'active' | 'installed' | 'absent'
+  bridge?: 'active' | 'installed' | 'not-running' | 'absent'
 }
 
 export interface AndroidDevicesResult {
@@ -267,6 +271,10 @@ export function createAndroidTools(host: AndroidHostController, options: Android
           ...(device.serial === streamed ? { streaming: true } : {}),
         })
       }
+      // A bridge that is enabled yet not answering does NOT recover on its own
+      // (measured: 60 s and 27 probes after its process was killed), so say what to
+      // do about it. Every other cause of a slow device fixes itself.
+      const stalled = devices.filter(d => d.bridge === 'not-running')
       let avds: string[] = []
       let note: string | undefined
       try {
@@ -283,6 +291,17 @@ export function createAndroidTools(host: AndroidHostController, options: Android
       return {
         devices,
         count: devices.length,
+        ...(stalled.length === 0
+          ? {}
+          : {
+              hint: 'The DSH Bridge is enabled on ' + stalled.map(d => d.serial).join(', ')
+                + ' but nothing is answering, so its process is gone — the system may have killed it, and the '
+                + 'accessibility service does NOT restart by itself. UI-tree reads are falling back to '
+                + 'uiautomator at roughly 3.5 s each instead of milliseconds. Restore it by turning the '
+                + 'accessibility service off and on in Settings > Accessibility (or re-append it to '
+                + 'enabled_accessibility_services), and on aggressive ROMs exclude the app from battery '
+                + 'optimisation so it is not killed again.',
+            }),
         online: devices.filter(device => device.state === 'device').map(device => device.serial),
         avds,
         ...(note === undefined ? {} : { note }),
