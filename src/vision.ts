@@ -37,12 +37,12 @@ export interface AndroidImageRef {
 /**
  * Structural face of the `attachments` service (AttachmentStore).
  *
- * The PUBLIC commit entry is `saveImages` (plural, one ordered batch). There
- * is a `saveImage` method in the kernel implementation, but it is an internal
- * step of `saveImages` and is NOT part of the object the service exposes —
- * probing for it always answers "absent", which silently disables the whole
- * image seam (every capture tool then degrades to text with no image block and
- * no error, and android_query/android_assert refuse for the wrong reason).
+ * BOTH entries are real and public. The mounted `LocalAttachmentStore`
+ * implements `saveImage` (single) and inherits `saveImages` (an ordered batch
+ * that loops over `saveImage`); the host's own `read_image` tool calls the
+ * singular one. So either is a valid way to commit an image, and probing for
+ * both is simply belt-and-braces — NOT a workaround for a method that is
+ * missing.
  */
 export interface AttachmentStoreLike {
   saveImages(inputs: Array<{ data: Uint8Array; mediaType: string; name?: string }>): Promise<AndroidImageRef[]>
@@ -88,11 +88,6 @@ function supportsImageCommit(store: AttachmentStoreLike): boolean {
   return typeof store.saveImages === 'function' || typeof store.saveImage === 'function'
 }
 
-/**
- * Resolve the optional vision services from the plugin context. Both come
- * back undefined on hosts that do not mount them; every consumer treats
- * that as "stay text-only".
- */
 /** True when this ctx can hand back a service (cordis' inject-free reader). */
 function readerOf(ctx: unknown): ((name: string) => unknown) | undefined {
   return (ctx as ContextLike)?.get?.bind(ctx)
